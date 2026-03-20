@@ -6,27 +6,43 @@
 // ============ 请求类型 ============
 
 export interface AnalysisRequest {
-  stockCode: string;
-  reportType?: 'simple' | 'detailed';
+  stockCode?: string;
+  stockCodes?: string[];
+  reportType?: 'simple' | 'detailed' | 'full' | 'brief';
   forceRefresh?: boolean;
   asyncMode?: boolean;
 }
 
 // ============ 报告类型 ============
 
+export type ReportLanguage = 'zh' | 'en';
+
 /** 报告元信息 */
 export interface ReportMeta {
+  id?: number;  // 分析历史记录主键 ID（历史报告时有此字段）
   queryId: string;
   stockCode: string;
   stockName: string;
-  reportType: 'simple' | 'detailed';
+  reportType: 'simple' | 'detailed' | 'full' | 'brief';
+  reportLanguage?: ReportLanguage;
   createdAt: string;
   currentPrice?: number;
   changePct?: number;
+  modelUsed?: string;  // 分析使用的 LLM 模型（Issue #528）
 }
 
 /** 情绪标签 */
-export type SentimentLabel = '极度悲观' | '悲观' | '中性' | '乐观' | '极度乐观';
+export type SentimentLabel =
+  | '极度悲观'
+  | '悲观'
+  | '中性'
+  | '乐观'
+  | '极度乐观'
+  | 'Very Bearish'
+  | 'Bearish'
+  | 'Neutral'
+  | 'Bullish'
+  | 'Very Bullish';
 
 /** 报告概览区 */
 export interface ReportSummary {
@@ -50,6 +66,8 @@ export interface ReportDetails {
   newsContent?: string;
   rawResult?: Record<string, unknown>;
   contextSnapshot?: Record<string, unknown>;
+  financialReport?: Record<string, unknown>;
+  dividendMetrics?: Record<string, unknown>;
 }
 
 /** 完整分析报告 */
@@ -77,6 +95,29 @@ export interface TaskAccepted {
   status: 'pending' | 'processing';
   message?: string;
 }
+
+export interface BatchTaskAcceptedItem {
+  taskId: string;
+  stockCode: string;
+  status: 'pending' | 'processing';
+  message?: string;
+}
+
+export interface BatchDuplicateTaskItem {
+  stockCode: string;
+  existingTaskId: string;
+  message: string;
+}
+
+export interface BatchTaskAcceptedResponse {
+  accepted: BatchTaskAcceptedItem[];
+  duplicates: BatchDuplicateTaskItem[];
+  message: string;
+}
+
+export type AnalyzeAsyncResponse = TaskAccepted | BatchTaskAcceptedResponse;
+
+export type AnalyzeResponse = AnalysisResult | AnalyzeAsyncResponse;
 
 /** 任务状态 */
 export interface TaskStatus {
@@ -122,7 +163,8 @@ export interface DuplicateTaskError {
 
 /** 历史记录摘要（列表展示用） */
 export interface HistoryItem {
-  queryId: string;
+  id: number;  // Record primary key ID, always present for persisted history items
+  queryId: string;  // 分析记录关联 query_id（批量分析时重复）
   stockCode: string;
   stockName?: string;
   reportType?: string;
@@ -176,7 +218,15 @@ export interface ApiError {
 // ============ 辅助函数 ============
 
 /** 根据情绪评分获取情绪标签 */
-export const getSentimentLabel = (score: number): SentimentLabel => {
+export const getSentimentLabel = (score: number, language: ReportLanguage = 'zh'): SentimentLabel => {
+  if (language === 'en') {
+    if (score <= 20) return 'Very Bearish';
+    if (score <= 40) return 'Bearish';
+    if (score <= 60) return 'Neutral';
+    if (score <= 80) return 'Bullish';
+    return 'Very Bullish';
+  }
+
   if (score <= 20) return '极度悲观';
   if (score <= 40) return '悲观';
   if (score <= 60) return '中性';

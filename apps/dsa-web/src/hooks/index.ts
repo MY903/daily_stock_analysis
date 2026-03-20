@@ -1,4 +1,7 @@
+export { useAuth } from './useAuth';
+export { useDashboardLifecycle } from './useDashboardLifecycle';
 export { useTaskStream } from './useTaskStream';
+export { useSystemConfig } from './useSystemConfig';
 export type {
   SSEEventType,
   SSEEvent,
