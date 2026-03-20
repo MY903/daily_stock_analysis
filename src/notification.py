@@ -1092,117 +1092,64 @@ class NotificationService:
     
     def generate_single_stock_report(self, result: AnalysisResult) -> str:
         """
-        生成单只股票的分析报告（用于单股推送模式 #55）
+        生成单只股票的精简分析报告（极简版）
         
-        格式精简但信息完整，适合每分析完一只股票立即推送
+        只保留核心结论、操作建议和关键点位，适合快速阅读
         
         Args:
             result: 单只股票的分析结果
             
         Returns:
-            Markdown 格式的单股报告
+            Markdown 格式的精简报告
         """
-        report_date = datetime.now().strftime('%Y-%m-%d %H:%M')
         signal_text, signal_emoji, _ = self._get_signal_level(result)
         dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
         core = dashboard.get('core_conclusion', {}) if dashboard else {}
         battle = dashboard.get('battle_plan', {}) if dashboard else {}
         intel = dashboard.get('intelligence', {}) if dashboard else {}
-        
-        # 股票名称（转义 *ST 等特殊字符）
+
+        # Stock name (escape special chars like *ST)
         raw_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
         stock_name = self._escape_md(raw_name)
-        
+
         lines = [
-            f"## {signal_emoji} {stock_name} ({result.code})",
-            "",
-            f"> {report_date} | 评分: **{result.sentiment_score}** | {result.trend_prediction}",
+            f"## {signal_emoji} {stock_name}({result.code})",
+            f"**{signal_text}** | 评分 {result.sentiment_score} | {result.trend_prediction}",
             "",
         ]
 
-        self._append_market_snapshot(lines, result)
-        
-        # 核心决策（一句话）
+        # Core conclusion (one sentence)
         one_sentence = core.get('one_sentence', result.analysis_summary) if core else result.analysis_summary
         if one_sentence:
-            lines.extend([
-                "### 📌 核心结论",
-                "",
-                f"**{signal_text}**: {one_sentence}",
-                "",
-            ])
-        
-        # 重要信息（舆情+基本面）
-        info_added = False
-        if intel:
-            if intel.get('earnings_outlook'):
-                if not info_added:
-                    lines.append("### 📰 重要信息")
-                    lines.append("")
-                    info_added = True
-                lines.append(f"📊 **业绩预期**: {intel['earnings_outlook'][:100]}")
-            
-            if intel.get('sentiment_summary'):
-                if not info_added:
-                    lines.append("### 📰 重要信息")
-                    lines.append("")
-                    info_added = True
-                lines.append(f"💭 **舆情情绪**: {intel['sentiment_summary'][:80]}")
-            
-            # 风险警报
-            risks = intel.get('risk_alerts', [])
-            if risks:
-                if not info_added:
-                    lines.append("### 📰 重要信息")
-                    lines.append("")
-                    info_added = True
-                lines.append("")
-                lines.append("🚨 **风险警报**:")
-                for risk in risks[:3]:
-                    lines.append(f"- {risk[:60]}")
-            
-            # 利好催化
-            catalysts = intel.get('positive_catalysts', [])
-            if catalysts:
-                lines.append("")
-                lines.append("✨ **利好催化**:")
-                for cat in catalysts[:3]:
-                    lines.append(f"- {cat[:60]}")
-        
-        if info_added:
+            lines.append(f"**结论**: {one_sentence[:100]}")
             lines.append("")
-        
-        # 狙击点位
+
+        # Position advice
+        pos_advice = core.get('position_advice', {}) if core else {}
+        no_pos = pos_advice.get('no_position', result.operation_advice) if pos_advice else result.operation_advice
+        has_pos = pos_advice.get('has_position', '继续持有') if pos_advice else '继续持有'
+        lines.append(f"• 空仓: {no_pos[:50]}")
+        lines.append(f"• 持仓: {has_pos[:50]}")
+        lines.append("")
+
+        # Key price levels (inline format)
         sniper = battle.get('sniper_points', {}) if battle else {}
         if sniper:
-            lines.extend([
-                "### 🎯 操作点位",
-                "",
-                "| 买点 | 止损 | 目标 |",
-                "|------|------|------|",
-            ])
-            ideal_buy = sniper.get('ideal_buy', '-')
-            stop_loss = sniper.get('stop_loss', '-')
-            take_profit = sniper.get('take_profit', '-')
-            lines.append(f"| {ideal_buy} | {stop_loss} | {take_profit} |")
+            ideal_buy = self._clean_sniper_value(sniper.get('ideal_buy', '-'))
+            stop_loss = self._clean_sniper_value(sniper.get('stop_loss', '-'))
+            take_profit = self._clean_sniper_value(sniper.get('take_profit', '-'))
+            lines.append(f"**点位**: 买入 {ideal_buy} | 止损 {stop_loss} | 目标 {take_profit}")
             lines.append("")
-        
-        # 持仓建议
-        pos_advice = core.get('position_advice', {}) if core else {}
-        if pos_advice:
-            lines.extend([
-                "### 💼 持仓建议",
-                "",
-                f"- 🆕 **空仓者**: {pos_advice.get('no_position', result.operation_advice)}",
-                f"- 💼 **持仓者**: {pos_advice.get('has_position', '继续持有')}",
-                "",
-            ])
-        
-        lines.extend([
-            "---",
-            "*AI生成，仅供参考，不构成投资建议*",
-        ])
-        
+
+        # Risk warning (brief, max 1 item)
+        risks = intel.get('risk_alerts', []) if intel else []
+        if risks:
+            risk_text = risks[0][:60] + "..." if len(risks[0]) > 60 else risks[0]
+            lines.append(f"**风险**: {risk_text}")
+            lines.append("")
+
+        lines.append("---")
+
         return "\n".join(lines)
 
     # Display name mapping for realtime data sources

@@ -80,6 +80,27 @@ STOCK_NAME_MAP = {
 }
 
 
+def is_etf(code: str) -> bool:
+    """
+    Check if a stock code is an ETF (Exchange Traded Fund).
+
+    ETF codes in China start with specific prefixes:
+    - 51xxxx, 52xxxx: Shanghai ETFs
+    - 56xxxx, 58xxxx: Shanghai ETFs (newer)
+    - 15xxxx, 16xxxx, 18xxxx: Shenzhen ETFs
+
+    Args:
+        code: Stock code (6 digits for A-share)
+
+    Returns:
+        True if the code is an ETF, False otherwise
+    """
+    import re
+    if not re.match(r'^\d{6}$', code):
+        return False
+    return code[:2] in ('51', '52', '56', '58', '15', '16', '18')
+
+
 def get_stock_name_multi_source(
     stock_code: str,
     context: Optional[Dict] = None,
@@ -607,13 +628,21 @@ class GeminiAnalyzer:
         try:
             import google.generativeai as genai
 
-            # 配置 API Key
-            genai.configure(api_key=self._api_key)
-
             # 从配置获取模型名称
             config = get_config()
             model_name = config.gemini_model
             fallback_model = config.gemini_model_fallback
+
+            # Configure API Key and optional custom endpoint (for proxy access)
+            configure_kwargs = {"api_key": self._api_key}
+            if config.gemini_api_base:
+                from google.api_core import client_options as client_options_lib
+                configure_kwargs["transport"] = "rest"
+                configure_kwargs["client_options"] = client_options_lib.ClientOptions(
+                    api_endpoint=config.gemini_api_base
+                )
+                logger.info(f"Using custom Gemini API endpoint: {config.gemini_api_base}")
+            genai.configure(**configure_kwargs)
 
             # 不再使用 Google Search Grounding（已知有兼容性问题）
             # 改为使用外部搜索服务（Tavily/SerpAPI）预先获取新闻
@@ -999,8 +1028,28 @@ class GeminiAnalyzer:
         today = context.get('today', {})
         
         # ========== 构建决策仪表盘格式的输入 ==========
-        prompt = f"""# 决策仪表盘分析请求
+        
+        # ETF-specific notice
+        etf_notice = ""
+        if is_etf(code):
+            etf_notice = """
+---
+## ⚠️ ETF 分析注意事项
 
+**该标的为场内 ETF（交易所交易基金）**，分析时请注意：
+1. **无需分析个股基本面**：ETF 无 PE/PB、业绩预告、股东减持等概念，请忽略这些维度
+2. **无需分析筹码分布**：ETF 无散户筹码概念，请忽略筹码相关数据
+3. **重点分析**：
+   - 跟踪指数/板块的整体表现和趋势
+   - 成交量变化和资金流入流出
+   - 对应板块/主题的市场热度
+   - 技术面指标（均线、乖离率等仍然有效）
+4. **操作建议**：更关注板块轮动和市场风格切换
+
+"""
+        
+        prompt = f"""# 决策仪表盘分析请求
+{etf_notice}
 ## 📊 股票基础信息
 | 项目 | 数据 |
 |------|------|

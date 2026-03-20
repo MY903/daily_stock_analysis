@@ -85,6 +85,11 @@ class BotMessage:
                 '批量': 'batch',
                 '帮助': 'help',
                 '状态': 'status',
+                '自选股': 'watchlist',
+                '股票列表': 'watchlist',
+                '我的自选': 'watchlist',
+                '添加': 'watchlist',
+                '删除': 'watchlist',
             }
             for cn_cmd, en_cmd in chinese_commands.items():
                 if text.startswith(cn_cmd):

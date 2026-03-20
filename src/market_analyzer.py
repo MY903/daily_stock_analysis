@@ -319,26 +319,15 @@ class MarketAnalyzer:
             return self._generate_template_review(overview, news)
     
     def _inject_data_into_review(self, review: str, overview: MarketOverview) -> str:
-        """Inject structured data tables into the corresponding LLM prose sections."""
-        import re
-
-        # Build data blocks
-        stats_block = self._build_stats_block(overview)
-        indices_block = self._build_indices_block(overview)
-        sector_block = self._build_sector_block(overview)
-
-        # Inject market stats after "### 一、市场总结" section (before next ###)
-        if stats_block:
-            review = self._insert_after_section(review, r'###\s*一、市场总结', stats_block)
-
-        # Inject indices table after "### 二、指数点评" section
-        if indices_block:
-            review = self._insert_after_section(review, r'###\s*二、指数点评', indices_block)
-
-        # Inject sector rankings after "### 四、热点解读" section
-        if sector_block:
-            review = self._insert_after_section(review, r'###\s*四、热点解读', sector_block)
-
+        """Inject structured data into the review (simplified version - minimal injection)."""
+        # For the new simplified format, we only inject sector data if missing
+        if overview.top_sectors and "**热点**:" in review:
+            sector_names = "、".join([s['name'] for s in overview.top_sectors[:3]])
+            # Check if hot sectors line is empty or placeholder
+            import re
+            pattern = r'\*\*热点\*\*:\s*\n'
+            if re.search(pattern, review):
+                review = re.sub(pattern, f'**热点**: {sector_names}\n', review)
         return review
 
     @staticmethod
@@ -405,95 +394,78 @@ class MarketAnalyzer:
         return "\n".join(lines)
 
     def _build_review_prompt(self, overview: MarketOverview, news: List) -> str:
-        """构建复盘报告 Prompt"""
-        # 指数行情信息（简洁格式，不用emoji）
+        """构建复盘报告 Prompt (简洁版)"""
+        # Index summary in one line
         indices_text = ""
         for idx in overview.indices:
             direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
             indices_text += f"- {idx.name}: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
-        
-        # 板块信息
+
+        # Sector info
         top_sectors_text = ", ".join([f"{s['name']}({s['change_pct']:+.2f}%)" for s in overview.top_sectors[:3]])
         bottom_sectors_text = ", ".join([f"{s['name']}({s['change_pct']:+.2f}%)" for s in overview.bottom_sectors[:3]])
-        
-        # 新闻信息 - 支持 SearchResult 对象或字典
+
+        # News - support SearchResult objects or dicts
         news_text = ""
-        for i, n in enumerate(news[:6], 1):
-            # 兼容 SearchResult 对象和字典
+        for i, n in enumerate(news[:4], 1):
             if hasattr(n, 'title'):
-                title = n.title[:50] if n.title else ''
-                snippet = n.snippet[:100] if n.snippet else ''
+                title = n.title[:40] if n.title else ''
             else:
-                title = n.get('title', '')[:50]
-                snippet = n.get('snippet', '')[:100]
-            news_text += f"{i}. {title}\n   {snippet}\n"
-        
-        prompt = f"""你是一位专业的A/H/美股市场分析师，请根据以下数据生成一份简洁的大盘复盘报告。
+                title = n.get('title', '')[:40]
+            news_text += f"{i}. {title}\n"
+
+        prompt = f"""你是一位专业的市场分析师，请根据以下数据生成一份**极简**市场速报。
 
 【重要】输出要求：
 - 必须输出纯 Markdown 文本格式
-- 禁止输出 JSON 格式
-- 禁止输出代码块
-- emoji 仅在标题处少量使用（每个标题最多1个）
+- 禁止输出 JSON 格式或代码块
+- 整体控制在150字以内
+- 语言简洁，每项内容1-2句话
 
 ---
 
-# 今日市场数据
+# 今日数据
 
-## 日期
-{overview.date}
+日期: {overview.date}
 
-## 主要指数
-{indices_text if indices_text else "暂无指数数据（接口异常）"}
+指数:
+{indices_text if indices_text else "暂无指数数据"}
 
-## 市场概况
-- 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
-- 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家
-- 两市成交额: {overview.total_amount:.0f} 亿元
+统计: 涨{overview.up_count}家 跌{overview.down_count}家 | 涨停{overview.limit_up_count} 跌停{overview.limit_down_count} | 成交{overview.total_amount:.0f}亿
 
-## 板块表现
-领涨: {top_sectors_text if top_sectors_text else "暂无数据"}
-领跌: {bottom_sectors_text if bottom_sectors_text else "暂无数据"}
+板块: 领涨[{top_sectors_text or '暂无'}] 领跌[{bottom_sectors_text or '暂无'}]
 
-## 市场新闻
-{news_text if news_text else "暂无相关新闻"}
+新闻:
+{news_text if news_text else "暂无"}
 
-{"注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。" if not indices_text else ""}
+{"注意：数据缺失时不要编造点位。" if not indices_text else ""}
 
 ---
 
-# 输出格式模板（请严格按此格式输出）
+# 输出格式（严格按此输出）
 
-## 📊 {overview.date} 大盘复盘
+## 📊 {overview.date} 市场速报
 
-### 一、市场总结
-（2-3句话概括今日市场整体表现，包括指数涨跌、成交量变化）
+**指数**: [一行列出主要指数涨跌，如: 沪指↑0.5% 深成指↓0.2% 创业板↑1.0%]
 
-### 二、指数点评
-（分析上证、深证、创业板等各指数走势特点）
+**要点**: [2句话总结今日市场特点]
 
-### 三、资金动向
-（解读成交额流向的含义）
+**热点**: [领涨板块名称，逗号分隔]
 
-### 四、热点解读
-（分析领涨领跌板块背后的逻辑和驱动因素）
+**资金**: [一句话说明成交额变化和资金动向]
 
-### 五、后市展望
-（结合当前走势和新闻，给出明日市场预判）
-
-### 六、风险提示
-（需要关注的风险点）
+**关注**: [一句话明日关注点或风险提示]
 
 ---
 
-请直接输出复盘报告内容，不要输出其他说明文字。
+请直接输出速报内容。
 """
         return prompt
     
     def _generate_template_review(self, overview: MarketOverview, news: List) -> str:
-        """使用模板生成复盘报告（无大模型时的备选方案）"""
-        
-        # 判断市场走势
+        """使用模板生成复盘报告（无大模型时的备选方案）- 简洁版"""
+
+        # Determine market mood
         sh_index = next((idx for idx in overview.indices if idx.code == '000001'), None)
         if sh_index:
             if sh_index.change_pct > 1:
@@ -506,43 +478,30 @@ class MarketAnalyzer:
                 market_mood = "明显下跌"
         else:
             market_mood = "震荡整理"
-        
-        # 指数行情（简洁格式）
-        indices_text = ""
-        for idx in overview.indices[:4]:
-            direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
-            indices_text += f"- **{idx.name}**: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
-        
-        # 板块信息
-        top_text = "、".join([s['name'] for s in overview.top_sectors[:3]])
-        bottom_text = "、".join([s['name'] for s in overview.bottom_sectors[:3]])
-        
-        report = f"""## 📊 {overview.date} 大盘复盘
 
-### 一、市场总结
-今日A股市场整体呈现**{market_mood}**态势。
+        # Build index line (inline format)
+        indices_inline = " | ".join([
+            f"{idx.name}{'↑' if idx.change_pct > 0 else '↓' if idx.change_pct < 0 else '-'}{abs(idx.change_pct):.2f}%"
+            for idx in overview.indices[:4]
+        ]) or "暂无数据"
 
-### 二、主要指数
-{indices_text}
+        # Sector info
+        top_text = "、".join([s['name'] for s in overview.top_sectors[:3]]) or "暂无"
 
-### 三、涨跌统计
-| 指标 | 数值 |
-|------|------|
-| 上涨家数 | {overview.up_count} |
-| 下跌家数 | {overview.down_count} |
-| 涨停 | {overview.limit_up_count} |
-| 跌停 | {overview.limit_down_count} |
-| 两市成交额 | {overview.total_amount:.0f}亿 |
+        report = f"""## 📊 {overview.date} 市场速报
 
-### 四、板块表现
-- **领涨**: {top_text}
-- **领跌**: {bottom_text}
+**指数**: {indices_inline}
 
-### 五、风险提示
-市场有风险，投资需谨慎。以上数据仅供参考，不构成投资建议。
+**要点**: 今日A股{market_mood}，两市成交{overview.total_amount:.0f}亿元，涨停{overview.limit_up_count}家、跌停{overview.limit_down_count}家。
+
+**热点**: {top_text}
+
+**资金**: 成交额{overview.total_amount:.0f}亿，{'量能放大需关注持续性' if overview.total_amount > 10000 else '量能一般，市场观望情绪浓'}。
+
+**关注**: 市场有风险，投资需谨慎。
 
 ---
-*复盘时间: {datetime.now().strftime('%H:%M')}*
+*{datetime.now().strftime('%H:%M')}*
 """
         return report
     
