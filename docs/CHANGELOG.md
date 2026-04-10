@@ -20,6 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 修正 `feishu_sender.py` 中飞书自定义机器人 Webhook 消息格式示例为 interactive card JSON，并补充飞书自动化 Webhook 触发器配置教程（参数 JSON 与 `card.elements[0].text.content` 字段映射）。
 
 ## [3.13.0] - 2026-04-21
+- [新功能] 新增 `CCXTCryptoFetcher` 加密货币数据源（基于 ccxt，默认 Kraken，可通过 `CCXT_EXCHANGE` 切换）。`is_crypto_code(code)` 识别 `BTC-USD`/`ETH-USD` 等格式后，`DataFetcherManager.get_daily_data` 优先走 CCXT 直连交易所、YFinance 兜底；`detect_market()` 新增 `crypto` 分支与对应分析指引；`trading_calendar` 将 crypto 视为 24/7 常开市场。ccxt 未安装时该数据源自动跳过，不影响现有 A 股 / 港股 / 美股链路。
+- [新功能] 新增 `data_provider.crypto_context_fetcher`：从 Alternative.me 拉取 Crypto Fear & Greed Index、从 CoinGecko 拉取全球加密市场概览与单币种指标，并在 `get_market_guidelines()` 返回的加密货币 prompt 中追加「实时市场数据」段，拉取失败时静默降级不阻塞分析。
+- [测试] 新增 `tests/test_ccxt_crypto_fetcher.py`（10 个用例），锁定 CCXT 日线 volume 归一化为 USD notional 的契约：以 `iloc[-2]`（前一交易日收盘价）作为常量乘子，rolling `volume_ratio` 相对原始 base-volume 零漂移（`places=10`），同一 UTC 日 intraday 多次拉取归一化结果完全一致；覆盖 1 行降级与 realtime `quoteVolume` 优先 / `baseVolume × last` 回退等边界。
+- [修复] 大盘复盘链路接入 `REPORT_LANGUAGE`：`REPORT_LANGUAGE=en` 时，A 股/合并复盘的 Prompt、章节标题、模板兜底文案与通知包装标题统一改为英文，避免出现英文正文外包中文标题的问题。
+- [修复] `AGENT_MAX_STEPS` 在 orchestrator 多 Agent 模式下统一明确为“默认作为各子 Agent 的步数上限而非硬覆盖；TechnicalAgent 等高默认值 Agent 会被封顶、低默认值 Agent 保持原值；当用户主动调高（>10）时，再统一覆盖所有子 Agent 采用全局值”，同时修复用户设置 12 但 TechnicalAgent 仍以默认 6 步运行并报 "Agent exceeded max steps" 的问题（fixes #1026）
+- [修复] Specialist（Skill）Agent 失败不再中断整个分析管线，改为与 intel/risk 相同的优雅降级策略
+- [改进] Agent 超步数错误信息增加 AGENT_MAX_STEPS 调整提示，帮助用户自助排查
+- [修复] **MiniMax-M2.7 模型连接测试支持** — 修复 LLM 通道连接测试在 MiniMax-M2.7 模型下返回 "Empty response" 的问题；增加了 `max_tokens` 上限（8→256）以容纳 MiniMax 思考过程，并添加 `content_blocks` 格式解析逻辑统一处理 MiniMax 响应格式差异。
+- [修复] 移除 `HistoryItem` 与 `ReportSummary` 响应 Schema 中 `sentiment_score` 的 `ge=0/le=100` 约束（fixes #942）——历史库中存储的超范围负值或大于 100 的情绪评分不再触发 Pydantic ValidationError，历史列表与详情接口恢复正常返回。
+- [改进] 后端股票名称解析改为优先复用前端 `stocks.index.json` 全量索引并懒加载缓存；纯后端/缺失静态资源场景静默降级回 `STOCK_NAME_MAP` 与原有数据源回退链路。
+- [改进] Agent IntelAgent 新增公司公告搜索维度（上交所/深交所/cninfo）与主力资金流工具（get_capital_flow），修复 Agent 模式下公告和资金流数据经常缺失的问题
+- [修复] webui_frontend.py 在 static/index.html 存在但 static/assets/ 缺失时发出明确警告，避免用户因 CSS/JS 资源缺失导致页面元素异常变大却无从排查
+- [修复] `StockAnalysisPipeline` 搜索服务与社交舆情服务改为可选降级初始化：任一服务初始化异常时记录 warning 并以禁用状态继续运行，避免外部依赖抖动阻塞主分析链路与 SSE 进度回调。
+- [文档] DEPLOY.md 和 deploy-webui-cloud.md 新增"UI 元素异常变大/布局错乱"排查步骤（重建 Docker 镜像或手动执行 npm run build）
+- [文档] 补充飞书 Webhook 配置说明：强调 `FEISHU_WEBHOOK_URL` 是群通知必填项、`FEISHU_WEBHOOK_SECRET` 与飞书机器人「签名校验」必须两端同时启用或同时关闭、`FEISHU_APP_SECRET` 仅用于应用/Stream Bot 模式不可替代 Webhook；同步完善英文指南并在 `.env.example` 为相关配置项补充内联说明注释
 
 ### 发布亮点
 - [新功能] 集成 Longbridge OpenAPI 作为美股/港股可选数据源；配置 `LONGBRIDGE_*` 后优先使用长桥获取日线与实时行情，YFinance / AkShare 兜底；未配置时行为与此前一致。长桥联调请使用 `tests/longbridge_live_smoke.py`（手动脚本，不参与 pytest 收集）。
