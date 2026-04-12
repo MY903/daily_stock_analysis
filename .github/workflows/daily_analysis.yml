@@ -22,6 +22,14 @@ on:
         required: false
         default: false
         type: boolean
+      strategy:
+        description: '分析策略（standard=标准 / ensemble=专家委员会）'
+        required: false
+        default: 'standard'
+        type: choice
+        options:
+          - standard
+          - ensemble
 
 # 并发控制：同一时间只运行一个分析任务
 concurrency:
@@ -65,7 +73,8 @@ jobs:
           LITELLM_CONFIG: ${{ vars.LITELLM_CONFIG || secrets.LITELLM_CONFIG }}
           LITELLM_CONFIG_YAML: ${{ vars.LITELLM_CONFIG_YAML || secrets.LITELLM_CONFIG_YAML }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          LITELLM_MODEL: ${{ vars.LITELLM_MODEL || secrets.LITELLM_MODEL }}
+          # ensemble 策略时自动注入 ensemble/ 前缀，触发专家委员会路由
+          LITELLM_MODEL: ${{ github.event.inputs.strategy == 'ensemble' && format('ensemble/{0}', vars.GEMINI_MODEL || 'gemini-2.0-flash') || vars.LITELLM_MODEL || secrets.LITELLM_MODEL }}
 
           # Gemini AI（主选）
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

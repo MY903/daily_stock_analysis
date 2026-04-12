@@ -1,0 +1,114 @@
+=== Testing Gemini CLI Headless Mode ===
+Gemini CLI Version: 0.36.0
+Sending context via Stdin (length: 113 chars)...
+Raw Output: {
+  "session_id": "940ed0be-fb26-4b61-ba86-09487b12b629",
+  "response": "```json\n{\n  \"sentiment\": 88,\n  \"summary\": \"AAPL shows strong bullish momentum with the price trading above both the 5-day and 10-day moving averages, confirmed by a Golden Cross technical indicator.\"\n}\n```",
+  "stats": {
+    "models": {
+      "gemini-2.5-flash-lite": {
+        "api": {
+          "totalRequests": 1,
+          "totalErrors": 0,
+          "totalLatencyMs": 2133
+        },
+        "tokens": {
+          "input": 2830,
+          "prompt": 2830,
+          "candidates": 61,
+          "total": 3242,
+          "cached": 0,
+          "thoughts": 351,
+          "tool": 0
+        },
+        "roles": {
+          "utility_router": {
+            "totalRequests": 1,
+            "totalErrors": 0,
+            "totalLatencyMs": 2133,
+            "tokens": {
+              "input": 2830,
+              "prompt": 2830,
+              "candidates": 61,
+              "total": 3242,
+              "cached": 0,
+              "thoughts": 351,
+              "tool": 0
+            }
+          }
+        }
+      },
+      "gemini-3-flash-preview": {
+        "api": {
+          "totalRequests": 1,
+          "totalErrors": 0,
+          "totalLatencyMs": 8911
+        },
+        "tokens": {
+          "input": 8374,
+          "prompt": 8374,
+          "candidates": 56,
+          "total": 9419,
+          "cached": 0,
+          "thoughts": 989,
+          "tool": 0
+        },
+        "roles": {
+          "main": {
+            "totalRequests": 1,
+            "totalErrors": 0,
+            "totalLatencyMs": 8911,
+            "tokens": {
+              "input": 8374,
+              "prompt": 8374,
+              "candidates": 56,
+              "total": 9419,
+              "cached": 0,
+              "thoughts": 989,
+              "tool": 0
+            }
+          }
+        }
+      }
+    },
+    "tools": {
+      "totalCalls": 0,
+      "totalSuccess": 0,
+      "totalFail": 0,
+      "totalDurationMs": 0,
+      "totalDecisions": {
+        "accept": 0,
+        "reject": 0,
+        "modify": 0,
+        "auto_accept": 0
+      },
+      "byName": {}
+    },
+    "files": {
+      "totalLinesAdded": 0,
+      "totalLinesRemoved": 0
+    }
+  }
+}
+SUCCESS: Parsed JSON -> {'session_id': '940ed0be-fb26-4b61-ba86-09487b12b629', 'response': '```json\n{\n  "sentiment": 88,\n  "summary": "AAPL shows strong bullish momentum with the price trading above both the 5-day and 10-day moving averages, confirmed by a Golden Cross technical indicator."\n}\n```', 'stats': {'models': {'gemini-2.5-flash-lite': {'api': {'totalRequests': 1, 'totalErrors': 0, 'totalLatencyMs': 2133}, 'tokens': {'input': 2830, 'prompt': 2830, 'candidates': 61, 'total': 3242, 'cached': 0, 'thoughts': 351, 'tool': 0}, 'roles': {'utility_router': {'totalRequests': 1, 'totalErrors': 0, 'totalLatencyMs': 2133, 'tokens': {'input': 2830, 'prompt': 2830, 'candidates': 61, 'total': 3242, 'cached': 0, 'thoughts': 351, 'tool': 0}}}}, 'gemini-3-flash-preview': {'api': {'totalRequests': 1, 'totalErrors': 0, 'totalLatencyMs': 8911}, 'tokens': {'input': 8374, 'prompt': 8374, 'candidates': 56, 'total': 9419, 'cached': 0, 'thoughts': 989, 'tool': 0}, 'roles': {'main': {'totalRequests': 1, 'totalErrors': 0, 'totalLatencyMs': 8911, 'tokens': {'input': 8374, 'prompt': 8374, 'candidates': 56, 'total': 9419, 'cached': 0, 'thoughts': 989, 'tool': 0}}}}}, 'tools': {'totalCalls': 0, 'totalSuccess': 0, 'totalFail': 0, 'totalDurationMs': 0, 'totalDecisions': {'accept': 0, 'reject': 0, 'modify': 0, 'auto_accept': 0}, 'byName': {}}, 'files': {'totalLinesAdded': 0, 'totalLinesRemoved': 0}}}
+=== Testing Gemini CLI Headless Mode ===
+Gemini CLI Version: 0.36.0
+Sending context via Stdin (length: 113 chars)...
+Raw Output: ```json
+{
+  "sentiment": 85,
+  "summary": "AAPL demonstrates a strong bullish trend characterized by a recent Golden Cross. With the current price of 180.5 staying above both the 5-day (178.0) and 10-day (175.0) moving averages, the stock exhibits solid upward momentum and positive technical alignment."
+}
+```
+SUCCESS: Parsed JSON -> {'sentiment': 85, 'summary': 'AAPL demonstrates a strong bullish trend characterized by a recent Golden Cross. With the current price of 180.5 staying above both the 5-day (178.0) and 10-day (175.0) moving averages, the stock exhibits solid upward momentum and positive technical alignment.'}
+--- Initiating Routing Test for Model: gemini-cli/gemini-2.0-flash ---
+
+SUCCESS!
+Model Used: gemini-cli/gemini-2.0-flash
+Usage Metadata: {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0, 'via_cli': True}
+Raw Output Snippet: {
+  "symbol": "AAPL",
+  "price": 180,
+  "trend": "Up",
+  "analysis": "AAPL displays a bullish signal with the current price at 180 supported by an upward trend. The positive momentum suggests continue...
+CLEANING: Response looks clean (no backticks).

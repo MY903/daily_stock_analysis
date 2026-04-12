@@ -92,6 +92,18 @@ class AgentModelsResponse(BaseModel):
     models: List[AgentModelDeployment]
 
 
+class ExpertPerformanceItem(BaseModel):
+    id: str
+    name: str
+    total_predictions: int
+    win_rate: float
+    win_count: int
+    settled_count: int
+
+class ExpertPerformanceResponse(BaseModel):
+    performance: List[ExpertPerformanceItem]
+
+
 @router.get("/models", response_model=AgentModelsResponse)
 async def get_agent_models():
     """Get configured Agent model deployments for frontend selection."""
@@ -99,6 +111,17 @@ async def get_agent_models():
     return AgentModelsResponse(
         models=[AgentModelDeployment(**item) for item in list_agent_model_deployments(config)]
     )
+
+
+@router.get("/experts/performance", response_model=ExpertPerformanceResponse)
+async def get_expert_performance():
+    """
+    获取专家（大师）的战绩统计和胜率榜单。
+    """
+    from src.services.performance_tracker import PerformanceTracker
+    tracker = PerformanceTracker()
+    performance = tracker.get_analyst_performance()
+    return ExpertPerformanceResponse(performance=performance)
 
 
 def _build_skills_response(config) -> SkillsResponse:

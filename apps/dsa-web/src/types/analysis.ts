@@ -15,6 +15,7 @@ export interface AnalysisRequest {
   originalQuery?: string;
   selectionSource?: 'manual' | 'autocomplete' | 'import' | 'image';
   notify?: boolean;
+  analysisMode?: 'standard' | 'ensemble';
 }
 
 // ============ Report Types ============
@@ -82,6 +83,22 @@ export interface SectorRankings {
 }
 
 /** Details section */
+export interface ExpertReport {
+  signal: 'bullish' | 'bearish' | 'neutral';
+  confidence: number;
+  reasoning: string;
+}
+
+export interface EnsembleReports {
+  [expertId: string]: ExpertReport;
+}
+
+export interface RadarDataItem {
+  subject: string;
+  fullMark: number;
+  value: number;
+}
+
 export interface ReportDetails {
   newsContent?: string;
   rawResult?: Record<string, unknown>;
@@ -90,6 +107,8 @@ export interface ReportDetails {
   dividendMetrics?: Record<string, unknown>;
   belongBoards?: RelatedBoard[];
   sectorRankings?: SectorRankings;
+  ensembleReports?: EnsembleReports;
+  radarData?: RadarDataItem[];
 }
 
 /** Full analysis report */

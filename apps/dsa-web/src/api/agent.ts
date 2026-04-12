@@ -49,6 +49,19 @@ export interface ChatSessionMessage {
   created_at: string | null;
 }
 
+export interface ExpertPerformanceItem {
+  id: string;
+  name: string;
+  total_predictions: number;
+  win_rate: number;
+  win_count: number;
+  settled_count: number;
+}
+
+export interface ExpertPerformanceResponse {
+  performance: ExpertPerformanceItem[];
+}
+
 export const agentApi = {
   async chat(payload: ChatRequest): Promise<ChatResponse> {
     const response = await apiClient.post<ChatResponse>('/api/v1/agent/chat', payload, {
@@ -58,6 +71,10 @@ export const agentApi = {
   },
   async getSkills(): Promise<SkillsResponse> {
     const response = await apiClient.get<SkillsResponse>('/api/v1/agent/skills');
+    return response.data;
+  },
+  async getExpertPerformance(): Promise<ExpertPerformanceResponse> {
+    const response = await apiClient.get<ExpertPerformanceResponse>('/api/v1/agent/experts/performance');
     return response.data;
   },
   async getChatSessions(limit = 50): Promise<ChatSessionItem[]> {

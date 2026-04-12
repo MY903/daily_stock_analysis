@@ -989,6 +989,25 @@ class AgentOrchestrator:
         if data_perspective:
             dashboard_block["data_perspective"] = data_perspective
 
+        # 专家报告透传（用于前端扩展展示）
+        ensemble_reports = payload.get("ensemble_reports")
+        if not isinstance(ensemble_reports, dict):
+            ensemble_reports = {}
+        
+        # 从 ctx.opinions 中提取专家的原始推理，补全给前端
+        for op in ctx.opinions:
+            if op.agent_name and op.agent_name not in ensemble_reports:
+                # 过滤掉内部 agent (technical, intel, risk, decision)
+                internal_names = {"technical", "intel", "risk", "decision", "skill_consensus"}
+                if op.agent_name not in internal_names:
+                    ensemble_reports[op.agent_name] = {
+                        "signal": op.signal,
+                        "confidence": int(op.confidence * 100) if isinstance(op.confidence, float) else op.confidence,
+                        "reasoning": op.reasoning,
+                        "agent_name": op.agent_name
+                    }
+        
+        dashboard_block["ensemble_reports"] = ensemble_reports
         dashboard_block["core_conclusion"] = core
         dashboard_block["intelligence"] = intelligence
         dashboard_block["battle_plan"] = battle

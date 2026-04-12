@@ -7,6 +7,8 @@ import type {
 import { Badge, Card, ScoreGauge } from '../common';
 import { formatDateTime } from '../../utils/format';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
+import { RadarChart, MasterVotingDisk, ExpertLeaderboard } from './';
+import { Users, ArrowUpCircle, ArrowDownCircle, HelpCircle } from 'lucide-react';
 
 interface ReportOverviewProps {
   meta: ReportMeta;
@@ -135,6 +137,13 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                   <h2 className="text-[28px] font-bold leading-tight text-foreground">
                     {meta.stockName || meta.stockCode}
                   </h2>
+                  {/* 专家委员会驱动标识 */}
+                  {details?.ensembleReports && Object.keys(details.ensembleReports).length > 0 && (
+                    <Badge variant="info" glow className="bg-indigo-500/10 text-indigo-400 border-indigo-500/30 px-2 py-1 gap-1">
+                      <Users className="w-3 h-3" />
+                      <span className="text-[10px] font-bold tracking-wider">ENSEMBLE</span>
+                    </Badge>
+                  )}
                   {/* 价格和涨跌幅 */}
                   {meta.currentPrice != null && (
                     <div className="flex items-baseline gap-2">
@@ -265,16 +274,82 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               </div>
             </Card>
           )}
+
+          {/* 专家委员会共识推演 - 核心版块 */}
+          {details?.ensembleReports && Object.keys(details.ensembleReports).length > 0 && (
+            <Card variant="bordered" padding="md" className="home-panel-card border-l-4 border-l-indigo-500">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Users className="w-5 h-5 text-indigo-400" />
+                  <span className="label-uppercase">Expert Consensus Detail</span>
+                  <h3 className="mt-0.5 text-base font-semibold text-foreground">专家委员会共识推演</h3>
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                {Object.entries(details.ensembleReports).map(([id, report]) => {
+                  const analystNames: Record<string, string> = {
+                    warren_buffett: '巴菲特',
+                    li_lu: '李录',
+                    paul_tudor_jones: '保罗·都铎·琼斯',
+                    jensen_huang: '黄仁勋',
+                    nassim_taleb: '塔勒布',
+                    ray_dalio: '雷·达里奥'
+                  };
+                  const signal = report.signal.toLowerCase();
+                  const isBullish = signal.includes('buy') || signal.includes('bullish');
+                  const isBearish = signal.includes('sell') || signal.includes('bearish');
+                  
+                  return (
+                    <div key={id} className="relative pl-5 border-l border-border/60 py-1 group">
+                      <div className="absolute -left-[5px] top-2 w-2.5 h-2.5 rounded-full bg-border group-hover:bg-indigo-500 transition-colors" />
+                      <div className="flex items-baseline justify-between gap-4 mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-foreground">{analystNames[id] || id}</span>
+                          <span className="text-[10px] text-muted-text opacity-70">CONFIDENCE {report.confidence}%</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {isBullish ? <ArrowUpCircle className="w-3.5 h-3.5 text-success" /> : 
+                           isBearish ? <ArrowDownCircle className="w-3.5 h-3.5 text-danger" /> : 
+                           <HelpCircle className="w-3.5 h-3.5 text-warning" />}
+                          <span className={`text-[11px] font-bold ${isBullish ? 'text-success' : isBearish ? 'text-danger' : 'text-warning'}`}>
+                            {isBullish ? '看多' : isBearish ? '看空' : '中性'}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-secondary-text leading-relaxed">
+                        {report.reasoning}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
         </div>
 
-        {/* 右侧：情绪指标 - 填满格子高度，消除与 STRATEGY POINTS 之间的空隙 */}
-        <div className="flex flex-col self-stretch min-h-full">
-          <Card variant="bordered" padding="md" className="home-panel-card home-rail-card !overflow-visible flex-1 flex flex-col min-h-0">
-            <div className="text-center flex-1 flex flex-col justify-center">
-              <h3 className="mb-5 text-sm font-medium tracking-wide text-foreground">{text.marketSentiment}</h3>
+        {/* 右侧：情绪指标与多维度评分 - 填满格子高度 */}
+        <div className="flex flex-col self-stretch min-h-full space-y-5">
+          <Card variant="bordered" padding="md" className="home-panel-card home-rail-card flex flex-col min-h-0">
+            <div className="text-center">
+              <h3 className="mb-4 text-sm font-medium tracking-wide text-foreground">{text.marketSentiment}</h3>
               <ScoreGauge score={summary.sentimentScore} size="lg" language={reportLanguage} />
             </div>
           </Card>
+
+          {/* 雷达图组件 */}
+          {details?.radarData && (
+            <Card variant="bordered" padding="md" className="home-panel-card flex-1 flex flex-col min-h-0">
+              <h3 className="mb-2 text-sm font-medium tracking-wide text-foreground text-center">多维度评分雷达</h3>
+              <RadarChart data={details.radarData} size={200} />
+            </Card>
+          )}
+
+          {/* 专家共识投票 */}
+          <MasterVotingDisk reports={details?.ensembleReports} />
+          
+          {/* 专家胜率榜单 */}
+          <ExpertLeaderboard />
         </div>
       </div>
     </div>

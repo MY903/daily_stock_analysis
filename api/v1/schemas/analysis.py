@@ -10,7 +10,7 @@
 3. 定义异步任务队列相关模型
 """
 
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Literal
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -70,6 +70,10 @@ class AnalyzeRequest(BaseModel):
     notify: bool = Field(
         True,
         description="是否发送推送通知（Telegram/企业微信等）"
+    )
+    analysis_mode: Optional[Literal["standard", "ensemble"]] = Field(
+        None,
+        description="分析策略：standard（标准）/ ensemble（专家委员会）。不传时使用服务端默认配置。"
     )
 
     class Config:

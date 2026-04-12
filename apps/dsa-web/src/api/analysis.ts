@@ -29,6 +29,7 @@ export const analysisApi = {
       original_query: data.originalQuery,
       selection_source: data.selectionSource,
       ...(data.notify !== undefined && { notify: data.notify }),
+      ...(data.analysisMode !== undefined && { analysis_mode: data.analysisMode }),
     };
 
     const response = await apiClient.post<Record<string, unknown>>(
@@ -62,6 +63,7 @@ export const analysisApi = {
       original_query: data.originalQuery,
       selection_source: data.selectionSource,
       ...(data.notify !== undefined && { notify: data.notify }),
+      ...(data.analysisMode !== undefined && { analysis_mode: data.analysisMode }),
     };
 
     const response = await apiClient.post<Record<string, unknown>>(

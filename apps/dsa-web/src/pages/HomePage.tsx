@@ -43,6 +43,8 @@ const HomePage: React.FC = () => {
     submitAnalysis,
     notify,
     setNotify,
+    analysisMode,
+    setAnalysisMode,
     syncTaskCreated,
     syncTaskUpdated,
     syncTaskFailed,
@@ -193,6 +195,22 @@ const HomePage: React.FC = () => {
               />
               推送通知
             </label>
+            <div className="flex h-10 flex-shrink-0 items-center gap-0.5 rounded-xl border border-subtle bg-surface/60 p-1 text-xs select-none">
+              <button
+                type="button"
+                onClick={() => setAnalysisMode('standard')}
+                className={`rounded-lg px-2.5 py-1 transition-colors ${analysisMode === 'standard' ? 'bg-primary text-primary-foreground' : 'text-secondary-text hover:text-foreground'}`}
+              >
+                标准
+              </button>
+              <button
+                type="button"
+                onClick={() => setAnalysisMode('ensemble')}
+                className={`rounded-lg px-2.5 py-1 transition-colors ${analysisMode === 'ensemble' ? 'bg-primary text-primary-foreground' : 'text-secondary-text hover:text-foreground'}`}
+              >
+                专家委员会
+              </button>
+            </div>
             <button
               type="button"
               onClick={() => handleSubmitAnalysis()}

@@ -46,6 +46,7 @@ class AnalysisService:
         query_id: Optional[str] = None,
         send_notification: bool = True,
         progress_callback: Optional[Callable[[int, str], None]] = None,
+        analysis_mode: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         执行股票分析
@@ -94,6 +95,7 @@ class AnalysisService:
                 skip_analysis=False,
                 single_stock_notify=send_notification,
                 report_type=rt,
+                analysis_mode=analysis_mode,
             )
             
             if result is None:
@@ -171,6 +173,8 @@ class AnalysisService:
                 "technical_analysis": result.technical_analysis,
                 "fundamental_analysis": result.fundamental_analysis,
                 "risk_warning": result.risk_warning,
+                "ensemble_reports": result.dashboard.get("ensemble_reports") if result.dashboard else None,
+                "radar_data": result.get_radar_data() if hasattr(result, "get_radar_data") else None,
             }
         }
         
