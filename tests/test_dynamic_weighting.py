@@ -1,11 +1,8 @@
 """
-单元测试 + 集成测试：动态权重算法
-- 纯逻辑测试（无 LLM 依赖）：权重计算、归一化、幂等回填
-- 集成测试（需要 gemini CLI）：达里奥基于权重作出偏向性裁决
+单元测试：动态权重算法
+- 权重计算、归一化、幂等回填（无 LLM 依赖）
 """
-import asyncio
 import os
-import shutil
 import sqlite3
 import sys
 
@@ -124,54 +121,3 @@ def test_lookback_days_filters_old_records(temp_tracker):
         f"lookback_days=7 时巴菲特应为基准权重，实际: {weights_7d['warren_buffett']}"
     )
 
-
-# ---------------------------------------------------------------------------
-# 集成测试：需要 gemini CLI（CI 环境自动跳过）
-# ---------------------------------------------------------------------------
-
-@pytest.mark.skipif(shutil.which("gemini") is None, reason="gemini CLI not installed")
-@pytest.mark.integration
-def test_dalio_respects_high_weight_expert(temp_tracker):
-    """
-    当巴菲特权重极低、塔勒布权重极高时，
-    达里奥的最终评级不应为 Strong Buy 或 Buy。
-    """
-    from tests.test_ensemble_consensus import call_expert_cli
-
-    # 塔勒布：5 场全对（bearish）
-    for _ in range(5):
-        rid = temp_tracker.record_prediction("nassim_taleb", "MOCK", "bearish", 90)
-        temp_tracker.backfill_result(rid, -0.05)
-
-    # 巴菲特：5 场全错（bullish）
-    for _ in range(5):
-        rid = temp_tracker.record_prediction("warren_buffett", "MOCK", "bullish", 90)
-        temp_tracker.backfill_result(rid, -0.05)
-
-    weights = temp_tracker.get_analyst_weights()
-
-    expert_reports = {
-        "warren_buffett": {"signal": "bullish", "confidence": 95, "reasoning": "最强护城河，全仓！"},
-        "nassim_taleb": {"signal": "bearish", "confidence": 80, "reasoning": "尾部风险极高，随时崩盘。"},
-        "li_lu": {"signal": "neutral", "confidence": 50, "reasoning": "待观察"},
-        "paul_tudor_jones": {"signal": "neutral", "confidence": 50, "reasoning": "震荡"},
-        "jensen_huang": {"signal": "neutral", "confidence": 50, "reasoning": "技术平平"},
-    }
-
-    aggregator = RayDalioAggregator()
-
-    async def _run():
-        return await call_expert_cli(
-            aggregator.get_expert_id(),
-            aggregator.SYSTEM_PROMPT,
-            aggregator.prepare_consensus_prompt("MOCK_TECH", expert_reports, weights)
-        )
-
-    final_report = asyncio.run(_run())
-
-    assert isinstance(final_report, dict), "final_report 应为 dict"
-    rating = final_report.get("final_rating", "")
-    assert rating in ["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"], f"非法评级: {rating}"
-    assert "Strong Buy" not in rating and "Buy" not in rating, (
-        f"塔勒布权重极高时，达里奥不应给出买入评级，实际: {rating}"
-    )

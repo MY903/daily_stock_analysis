@@ -1,84 +1,64 @@
+"""
+单元测试：单一专家节点
+- 验证专家 prompt 生成的正确性（无 LLM 依赖）
+- 验证专家 ID 唯一性与基本结构
+"""
 import os
-import subprocess
-import json
 import sys
-from typing import Dict, Any
 
-# 将 src 目录添加到路径，以便导入
+import pytest
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.agents.experts.warren_buffett import WarrenBuffettExpert
 
-def test_warren_buffett_integration():
-    """
-    测试巴菲特专家节点通过 Gemini CLI Headless 模式的集成。
-    """
+
+TICKER = "600519.SH (贵州茅台)"
+TECHNICAL_DATA = {
+    "current_price": "1450.00 CNY",
+    "trend_summary": "自 1700 元高点回落，目前处于半年均线下方，呈缩量阴跌态势。",
+    "technical_indicators": "RSI(14) 接近 30，显示超卖；MACD 死叉已持续 5 个交易日。",
+}
+NEWS_DATA = [
+    {"date": "2026-04-01", "title": "部分机构下调白酒行业全年增长预期"},
+    {"date": "2026-04-02", "title": "茅台集团：稳步推进高质量增长，品牌护城河稳固"},
+    {"date": "2026-04-03", "title": "外资连续 3 日净流出白酒板块"},
+]
+
+
+def test_warren_buffett_prompt_is_non_empty():
+    """巴菲特专家的 prepare_prompt 应返回非空字符串，包含股票代码。"""
     expert = WarrenBuffettExpert()
-    
-    # 模拟茅台在行情阴跌且有负面舆情时的上下文
-    ticker = "600519.SH (贵州茅台)"
-    technical_data = {
-        "current_price": "1450.00 CNY",
-        "trend_summary": "自 1700 元高点回落，目前处于半年均线下方，呈缩量阴跌态势。",
-        "technical_indicators": "RSI(14) 接近 30，显示超卖；MACD 死叉已持续 5 个交易日。"
-    }
-    news_data = [
-        {"date": "2026-04-01", "title": "部分机构下调白酒行业全年增长预期"},
-        {"date": "2026-04-02", "title": "茅台集团：稳步推进高质量增长，品牌护城河稳固"},
-        {"date": "2026-04-03", "title": "外资连续 3 日净流出白酒板块"}
-    ]
-    
-    user_prompt = expert.prepare_prompt(ticker, technical_data, news_data)
-    system_prompt = expert.SYSTEM_PROMPT
-    
-    print(f"--- 正在调用 Gemini CLI (Expert: {expert.get_expert_id()}) ---")
-    
-    # 模拟我们已有的 Headless 路由逻辑
-    full_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}"
-    
-    try:
-        # 强制使用 -p 模式
-        cmd = ["gemini", "-p", "请作为巴菲特，仅根据上下文输出 JSON 分析结果。"]
-        result = subprocess.run(
-            cmd,
-            input=full_prompt,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            timeout=120
-        )
-        
-        if result.returncode != 0:
-            print(f"Error calling Gemini: {result.stderr}")
-            return
+    prompt = expert.prepare_prompt(TICKER, TECHNICAL_DATA, NEWS_DATA)
+    assert isinstance(prompt, str)
+    assert len(prompt) > 50
+    assert TICKER in prompt or "600519" in prompt
 
-        output = result.stdout.strip()
-        print(f"Raw Output: {output}")
-        
-        # 清洗反引号逻辑
-        if "```json" in output:
-            output = output.split("```json")[1].split("```")[0].strip()
-        elif "```" in output:
-            output = output.split("```")[1].split("```")[0].strip()
-            
-        # 尝试解析 JSON
-        data = json.loads(output)
-        
-        print("\n--- 专家分析结果 ---")
-        print(f"Signal: {data.get('signal')}")
-        print(f"Confidence: {data.get('confidence')}%")
-        print(f"Reasoning: {data.get('reasoning')}")
-        
-        # 断言字段完整性
-        assert "signal" in data
-        assert "confidence" in data
-        assert "reasoning" in data
-        assert data["signal"] in ["bullish", "bearish", "neutral"]
-        
-        print("\n[SUCCESS] 阶段二：单一“大师”节点验证通过。")
-        
-    except Exception as e:
-        print(f"Test failed: {str(e)}")
 
-if __name__ == "__main__":
-    test_warren_buffett_integration()
+def test_warren_buffett_system_prompt_defined():
+    """SYSTEM_PROMPT 应为非空字符串。"""
+    expert = WarrenBuffettExpert()
+    assert isinstance(expert.SYSTEM_PROMPT, str)
+    assert len(expert.SYSTEM_PROMPT) > 20
+
+
+def test_warren_buffett_expert_id():
+    """expert_id 应为非空字符串，且包含可识别的标识。"""
+    expert = WarrenBuffettExpert()
+    eid = expert.get_expert_id()
+    assert isinstance(eid, str) and len(eid) > 0
+    assert "buffett" in eid.lower() or "warren" in eid.lower()
+
+
+def test_prompt_contains_technical_data():
+    """prompt 中应包含技术指标的关键信息。"""
+    expert = WarrenBuffettExpert()
+    prompt = expert.prepare_prompt(TICKER, TECHNICAL_DATA, NEWS_DATA)
+    assert "1450" in prompt or "RSI" in prompt or "MACD" in prompt
+
+
+def test_prompt_contains_news():
+    """prompt 中应包含至少一条新闻标题。"""
+    expert = WarrenBuffettExpert()
+    prompt = expert.prepare_prompt(TICKER, TECHNICAL_DATA, NEWS_DATA)
+    assert any(news["title"] in prompt for news in NEWS_DATA)

@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 战绩回填脚本（`scripts/backfill_performance.py`）：自动查询 5 日后真实收盘价，判定每条预测胜负，支持 `--dry-run` 模式；回填操作幂等，可重复执行
 - [新功能] WebUI 支持按请求选择分析策略（标准 / 专家委员会），在输入框右侧新增策略切换控件
 - [新功能] GitHub Actions `workflow_dispatch` 增加 `strategy` 参数（standard / ensemble），选 ensemble 时自动注入 `LITELLM_MODEL=ensemble/<GEMINI_MODEL>`
-- [改进] ensemble 专家委员会模式在无 `gemini-cli` 环境（如 GitHub Actions）下自动降级到 LiteLLM API 调用，不再崩溃
+- [改进] ensemble 专家委员会模式统一走 LiteLLM 调用链路，移除 gemini-cli subprocess 旁路；测试套件同步去除 CLI 集成测试，全部改为无外部依赖的纯单元测试
 - [改进] `AnalyzeRequest` 新增 `analysis_mode` 字段，支持按请求覆盖分析策略，全链路（endpoint → task_queue → service → pipeline → analyzer）透传
 - [改进] ensemble 并发分析增加 120s 超时保护，防止单个专家 LLM 调用挂死阻塞整条流程
 - [修复] **MiniMax-M2.7 模型连接测试支持** — 修复 LLM 通道连接测试在 MiniMax-M2.7 模型下返回 "Empty response" 的问题；增加了 `max_tokens` 上限（8→256）以容纳 MiniMax 思考过程，并添加 `content_blocks` 格式解析逻辑统一处理 MiniMax 响应格式差异。
