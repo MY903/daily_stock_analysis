@@ -73,3 +73,8 @@ skip = [".git", "__pycache__", ".env", "venv", ".venv"]
 [tool.bandit]
 exclude_dirs = ["tests", "test_*.py"]
 skips = ["B101"]  # assert 语句在测试中是允许的
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

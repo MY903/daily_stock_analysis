@@ -1,5 +1,8 @@
 import json
-from typing import Dict, Any, List
+import logging
+from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 class RayDalioAggregator:
     """
@@ -39,10 +42,23 @@ class RayDalioAggregator:
     }
     """
 
-    def prepare_consensus_prompt(self, ticker: str, expert_reports: Dict[str, Dict[str, Any]], weights: Dict[str, float] = None) -> str:
+    def prepare_consensus_prompt(self, ticker: str, expert_reports: Dict[str, Dict[str, Any]], weights: Optional[Dict[str, float]] = None) -> str:
         """
         将 5 位专家的原始报告拼接到达里奥的 User Prompt 中，并附带历史胜率权重。
+
+        Args:
+            ticker: 股票代码或名称
+            expert_reports: 各专家分析报告，每条需包含 signal / confidence / reasoning
+            weights: 归一化后的历史胜率权重；未传入时各专家权重视为相等
         """
+        _required = {"signal", "confidence", "reasoning"}
+        for eid, report in expert_reports.items():
+            missing = _required - set(report.keys())
+            if missing:
+                logger.warning(f"[Consensus] expert '{eid}' report missing fields: {missing}，使用空值补全")
+                for k in missing:
+                    report[k] = "" if k == "reasoning" else ("neutral" if k == "signal" else 0)
+
         reports_context = ""
         for expert_id, report in expert_reports.items():
             weight = weights.get(expert_id, 1.0) if weights else 1.0

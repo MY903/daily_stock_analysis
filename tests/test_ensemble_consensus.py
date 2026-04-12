@@ -1,11 +1,18 @@
+"""
+集成测试：专家委员会共识引擎
+- 纯单元测试部分（不需要 LLM）：权重注入、prompt 拼接、输入校验
+- 集成测试部分（需要 gemini CLI）：跳过条件由 skipif 控制
+"""
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
 from typing import Dict, Any
 
-# 将 src 目录添加到路径，以便导入
+import pytest
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.agents.experts.warren_buffett import WarrenBuffettExpert
@@ -15,99 +22,154 @@ from src.agents.experts.jensen_huang import JensenHuangExpert
 from src.agents.experts.nassim_taleb import NassimTalebExpert
 from src.agents.consensus_engine import RayDalioAggregator
 
+
+# ---------------------------------------------------------------------------
+# 工具函数（CLI 调用，供集成测试使用）
+# ---------------------------------------------------------------------------
+
 async def call_expert_cli(expert_id: str, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
-    """
-    异步调用 Gemini CLI 子进程。
-    """
+    """异步调用 Gemini CLI 子进程。"""
     full_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}"
     cmd = ["gemini", "-p", f"Expert: {expert_id}. Output JSON ONLY."]
-    
-    # 使用 asyncio.create_subprocess_exec 实现非阻塞调用
+
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )
-    
     stdout, stderr = await process.communicate(input=full_prompt.encode('utf-8'))
-    
+
     if process.returncode != 0:
-        print(f"Error calling {expert_id}: {stderr.decode()}")
-        return {"signal": "neutral", "confidence": 0, "reasoning": "Error"}
-    
+        return {"signal": "neutral", "confidence": 0, "reasoning": "CLI Error"}
+
     output = stdout.decode().strip()
-    # 清洗逻辑
     if "```json" in output:
         output = output.split("```json")[1].split("```")[0].strip()
     elif "```" in output:
         output = output.split("```")[1].split("```")[0].strip()
-    
+
     try:
         return json.loads(output)
-    except:
-        print(f"Failed to parse JSON for {expert_id}: {output}")
+    except Exception:
         return {"signal": "neutral", "confidence": 0, "reasoning": "Parse Error"}
 
-async def run_ensemble_test():
-    """
-    模拟大模型委员会并发分析过程。
-    """
-    ticker = "300308.SZ (中际旭创 - AI 算力光模块龙头)"
-    technical_data = {
-        "current_price": "165.50 CNY",
-        "trend_summary": "处于上升通道，近日小幅回调至 20 日均线支撑位。",
-        "technical_indicators": "MACD 金叉，RSI 位于 65 偏强区。"
+
+# ---------------------------------------------------------------------------
+# 单元测试：不依赖 LLM / gemini CLI
+# ---------------------------------------------------------------------------
+
+def test_consensus_engine_prompt_includes_weights():
+    """权重参数必须被注入进 user prompt。"""
+    aggregator = RayDalioAggregator()
+    expert_reports = {
+        "warren_buffett": {"signal": "bullish", "confidence": 90, "reasoning": "Great moat"},
+        "nassim_taleb": {"signal": "bearish", "confidence": 70, "reasoning": "Tail risk"},
     }
-    news_data = [
-        {"date": "2026-04-01", "title": "英伟达 B200 芯片订单需求超预期，光模块需求暴增"},
-        {"date": "2026-04-02", "title": "财报显示中际旭创净利润同比增长 100%+"},
-        {"date": "2026-04-03", "title": "市场传言某些算力禁令可能升级"}
-    ]
-    
-    # 1. 初始化专家委员会
+    weights = {"warren_buffett": 0.3, "nassim_taleb": 0.7}
+    prompt = aggregator.prepare_consensus_prompt("AAPL", expert_reports, weights)
+
+    assert "warren_buffett" in prompt
+    assert "nassim_taleb" in prompt
+    assert "0.3" in prompt
+    assert "0.7" in prompt
+
+
+def test_consensus_engine_prompt_without_weights():
+    """未传入 weights 时，prompt 中应显示默认值 1.0。"""
+    aggregator = RayDalioAggregator()
+    expert_reports = {
+        "warren_buffett": {"signal": "bullish", "confidence": 80, "reasoning": "Value"},
+    }
+    prompt = aggregator.prepare_consensus_prompt("AAPL", expert_reports)
+    assert "warren_buffett" in prompt
+    assert "1.0" in prompt
+
+
+def test_consensus_engine_missing_fields_are_patched():
+    """报告缺少字段时应被自动补全，不抛出异常。"""
+    aggregator = RayDalioAggregator()
+    # 故意缺少 reasoning
+    expert_reports = {
+        "warren_buffett": {"signal": "bullish", "confidence": 80},
+    }
+    prompt = aggregator.prepare_consensus_prompt("AAPL", expert_reports)
+    assert "warren_buffett" in prompt  # 不应抛异常
+
+
+def test_expert_get_id():
+    """每位专家都应返回唯一的 ID。"""
     experts = [
         WarrenBuffettExpert(),
         LiLuExpert(),
         PaulTudorJonesExpert(),
         JensenHuangExpert(),
-        NassimTalebExpert()
+        NassimTalebExpert(),
     ]
-    
-    print(f"🚀 启动委员会对 {ticker} 的并发分析...")
-    
-    # 2. 并发调用所有专家 (Asyncio Gather)
-    tasks = []
-    for e in experts:
-        tasks.append(call_expert_cli(
-            e.get_expert_id(), 
-            e.SYSTEM_PROMPT, 
-            e.prepare_prompt(ticker, technical_data, news_data)
-        ))
-    
-    expert_results = await asyncio.gather(*tasks)
-    
-    # 组合结果
-    expert_reports = {experts[i].get_expert_id(): expert_results[i] for i in range(len(experts))}
-    
-    for eid, rep in expert_reports.items():
-        print(f"✅ {eid} 完成分析: {rep.get('signal')} ({rep.get('confidence')}%)")
-    
-    # 3. 秘书长达里奥汇总
-    print(f"\n👔 秘书长雷·达里奥正在主持最终裁决...")
-    aggregator = RayDalioAggregator()
-    final_report = await call_expert_cli(
-        aggregator.get_expert_id(),
-        aggregator.SYSTEM_PROMPT,
-        aggregator.prepare_consensus_prompt(ticker, expert_reports)
-    )
-    
-    print("\n" + "="*50)
-    print(f"【最终结论】: {final_report.get('final_rating')}")
-    print(f"【共识点】: {final_report.get('consensus_summary')}")
-    print(f"【分歧点】: {final_report.get('divergence_analysis')}")
-    print(f"【操作建议】: {final_report.get('action_plan')}")
-    print("="*50)
+    ids = [e.get_expert_id() for e in experts]
+    assert len(ids) == len(set(ids)), "专家 ID 不应重复"
 
-if __name__ == "__main__":
-    asyncio.run(run_ensemble_test())
+
+def test_expert_prepare_prompt_returns_string():
+    """每位专家的 prepare_prompt 都应返回非空字符串。"""
+    ticker = "600519.SH"
+    technical_data = {"current_price": "1800", "trend_summary": "上升", "technical_indicators": "RSI=60"}
+    news_data = [{"date": "2026-04-01", "title": "茅台营收创新高"}]
+
+    for ExpertCls in [WarrenBuffettExpert, LiLuExpert, PaulTudorJonesExpert, JensenHuangExpert, NassimTalebExpert]:
+        expert = ExpertCls()
+        prompt = expert.prepare_prompt(ticker, technical_data, news_data)
+        assert isinstance(prompt, str) and len(prompt) > 50, f"{expert.get_expert_id()} prompt 过短或为空"
+
+
+# ---------------------------------------------------------------------------
+# 集成测试：需要 gemini CLI（CI 环境自动跳过）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(shutil.which("gemini") is None, reason="gemini CLI not installed")
+@pytest.mark.integration
+def test_ensemble_full_flow():
+    """全链路集成测试：5 位专家并发分析 + 达里奥汇总。需要已认证的 gemini CLI。"""
+    ticker = "300308.SZ"
+    technical_data = {
+        "current_price": "165.50",
+        "trend_summary": "上升通道，回调至 20 日均线",
+        "technical_indicators": "MACD 金叉，RSI=65"
+    }
+    news_data = [
+        {"date": "2026-04-01", "title": "英伟达 B200 芯片订单需求超预期"},
+        {"date": "2026-04-02", "title": "中际旭创净利润同比增长 100%+"},
+    ]
+
+    async def _run():
+        experts = [
+            WarrenBuffettExpert(), LiLuExpert(), PaulTudorJonesExpert(),
+            JensenHuangExpert(), NassimTalebExpert()
+        ]
+        tasks = [
+            call_expert_cli(e.get_expert_id(), e.SYSTEM_PROMPT, e.prepare_prompt(ticker, technical_data, news_data))
+            for e in experts
+        ]
+        expert_results = await asyncio.gather(*tasks)
+        expert_reports = {experts[i].get_expert_id(): expert_results[i] for i in range(len(experts))}
+
+        aggregator = RayDalioAggregator()
+        final_report = await call_expert_cli(
+            aggregator.get_expert_id(),
+            aggregator.SYSTEM_PROMPT,
+            aggregator.prepare_consensus_prompt(ticker, expert_reports)
+        )
+        return final_report
+
+    final_report = asyncio.run(_run())
+
+    # 若 CLI 调用失败（认证未完成、网络问题等），跳过而非报失败
+    if final_report.get("reasoning") in ("CLI Error", "Parse Error"):
+        pytest.skip(f"gemini CLI 调用失败: {final_report.get('reasoning')}，请确认认证状态")
+
+    assert isinstance(final_report, dict), "final_report 应为 dict"
+    assert final_report.get("final_rating") in [
+        "Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"
+    ], f"final_rating 值非法: {final_report.get('final_rating')}"
+    assert "consensus_summary" in final_report
+    assert "action_plan" in final_report

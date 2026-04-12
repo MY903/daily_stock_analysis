@@ -1137,7 +1137,11 @@ class GeminiAnalyzer:
             user_prompt = e.prepare_prompt(name, technical_data, news_list)
             tasks.append(self._call_expert_async(e.get_expert_id(), e.SYSTEM_PROMPT, user_prompt))
         
-        expert_results = await asyncio.gather(*tasks)
+        try:
+            expert_results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=120)
+        except asyncio.TimeoutError:
+            logger.error(f"[Ensemble] 专家委员会分析超时（120s），{name}({code})")
+            raise RuntimeError(f"Ensemble analysis timed out for {code}")
         expert_reports = {experts[i].get_expert_id(): expert_results[i] for i in range(len(experts))}
         
         # 5. 记录战绩埋点 (供阶段四结算)

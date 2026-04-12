@@ -30,10 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] `AGENT_MAX_STEPS` 在 orchestrator 多 Agent 模式下统一明确为“默认作为各子 Agent 的步数上限而非硬覆盖；TechnicalAgent 等高默认值 Agent 会被封顶、低默认值 Agent 保持原值；当用户主动调高（>10）时，再统一覆盖所有子 Agent 采用全局值”，同时修复用户设置 12 但 TechnicalAgent 仍以默认 6 步运行并报 "Agent exceeded max steps" 的问题（fixes #1026）
 - [修复] Specialist（Skill）Agent 失败不再中断整个分析管线，改为与 intel/risk 相同的优雅降级策略
 - [改进] Agent 超步数错误信息增加 AGENT_MAX_STEPS 调整提示，帮助用户自助排查
+- [新功能] 引入专家委员会共识系统（ensemble mode）：Warren Buffett / Li Lu / Paul Tudor Jones / Jensen Huang / Nassim Taleb 五位虚拟大师并发分析，由 Ray Dalio 聚合器加权汇总，输出最终评级与分歧分析；设计思路借鉴自 [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)
+- [新功能] 动态置信度加权（PerformanceTracker）：以 SQLite 持久化专家预测战绩，权重公式 `(accuracy + 0.1)^1.5` 归一化后注入共识 prompt；最近 30 天滚动评估，新专家默认等权基准，不惩罚零历史专家
+- [新功能] 战绩回填脚本（`scripts/backfill_performance.py`）：自动查询 5 日后真实收盘价，判定每条预测胜负，支持 `--dry-run` 模式；回填操作幂等，可重复执行
 - [新功能] WebUI 支持按请求选择分析策略（标准 / 专家委员会），在输入框右侧新增策略切换控件
 - [新功能] GitHub Actions `workflow_dispatch` 增加 `strategy` 参数（standard / ensemble），选 ensemble 时自动注入 `LITELLM_MODEL=ensemble/<GEMINI_MODEL>`
 - [改进] ensemble 专家委员会模式在无 `gemini-cli` 环境（如 GitHub Actions）下自动降级到 LiteLLM API 调用，不再崩溃
 - [改进] `AnalyzeRequest` 新增 `analysis_mode` 字段，支持按请求覆盖分析策略，全链路（endpoint → task_queue → service → pipeline → analyzer）透传
+- [改进] ensemble 并发分析增加 120s 超时保护，防止单个专家 LLM 调用挂死阻塞整条流程
 - [修复] **MiniMax-M2.7 模型连接测试支持** — 修复 LLM 通道连接测试在 MiniMax-M2.7 模型下返回 "Empty response" 的问题；增加了 `max_tokens` 上限（8→256）以容纳 MiniMax 思考过程，并添加 `content_blocks` 格式解析逻辑统一处理 MiniMax 响应格式差异。
 - [修复] 移除 `HistoryItem` 与 `ReportSummary` 响应 Schema 中 `sentiment_score` 的 `ge=0/le=100` 约束（fixes #942）——历史库中存储的超范围负值或大于 100 的情绪评分不再触发 Pydantic ValidationError，历史列表与详情接口恢复正常返回。
 
