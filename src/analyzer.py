@@ -528,12 +528,16 @@ class AnalysisResult:
 
             # 3. 风险度 (100 - 风险项数量*10)
             risks = self.dashboard.get("intelligence", {}).get("risk_alerts", [])
-            # 专家委员会的分歧也是风险
+            # 保存分歧惩罚标志，待 risk_alerts 分算完后叠加，避免被覆盖
+            divergence_penalty = False
             if self.dashboard.get("ensemble_reports"):
                 divergence = self.risk_warning or ""
                 if "分歧" in divergence or "争议" in divergence:
-                    risk_score = min(risk_score, 40)
+                    divergence_penalty = True
             risk_score = max(0, 100 - len(risks) * 10)
+            # 叠加委员会分歧惩罚：取两者最严格值
+            if divergence_penalty:
+                risk_score = min(risk_score, 40)
 
             # 4. 基本面 (简单基于关键词或专家共识评分)
             fund_analysis = (self.fundamental_analysis or "").lower()

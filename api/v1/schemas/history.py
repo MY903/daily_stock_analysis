@@ -148,7 +148,7 @@ class ReportStrategy(BaseModel):
 
 class ReportDetails(BaseModel):
     """报告详情区"""
-    
+
     news_content: Optional[str] = Field(None, description="新闻摘要")
     raw_result: Optional[Any] = Field(None, description="原始分析结果（JSON）")
     context_snapshot: Optional[Any] = Field(None, description="分析时上下文快照（JSON）")
@@ -156,6 +156,8 @@ class ReportDetails(BaseModel):
     dividend_metrics: Optional[Any] = Field(None, description="结构化分红指标（含 TTM 口径）")
     belong_boards: Optional[Any] = Field(None, description="关联板块列表")
     sector_rankings: Optional[Any] = Field(None, description="板块涨跌榜（结构 {top, bottom}）")
+    ensemble_reports: Optional[Any] = Field(None, description="专家委员会报告（各大师信号与置信度）")
+    radar_data: Optional[Any] = Field(None, description="雷达图五维评分数据")
 
 
 class AnalysisReport(BaseModel):

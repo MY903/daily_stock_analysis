@@ -307,6 +307,28 @@ def get_history_detail(
             fallback_fundamental_payload=fallback_fundamental,
         )
 
+        raw_result_dict = result.get("raw_result")
+        ensemble_reports = None
+        radar_data = None
+        if isinstance(raw_result_dict, dict):
+            dashboard = raw_result_dict.get("dashboard") or {}
+            ensemble_reports = dashboard.get("ensemble_reports") or None
+            try:
+                from src.analyzer import AnalysisResult
+                _partial = AnalysisResult(
+                    code=result.get("stock_code", ""),
+                    name=result.get("stock_name", ""),
+                    sentiment_score=int(raw_result_dict.get("sentiment_score") or 50),
+                    trend_prediction=raw_result_dict.get("trend_prediction", ""),
+                    operation_advice=raw_result_dict.get("operation_advice", ""),
+                    dashboard=raw_result_dict.get("dashboard"),
+                    risk_warning=raw_result_dict.get("risk_warning", ""),
+                    fundamental_analysis=raw_result_dict.get("fundamental_analysis", ""),
+                )
+                radar_data = _partial.get_radar_data()
+            except Exception:
+                pass
+
         details = ReportDetails(
             news_content=result.get("news_content"),
             raw_result=result.get("raw_result"),
@@ -315,6 +337,8 @@ def get_history_detail(
             dividend_metrics=extracted_fundamental.get("dividend_metrics"),
             belong_boards=extracted_boards.get("belong_boards"),
             sector_rankings=extracted_boards.get("sector_rankings"),
+            ensemble_reports=ensemble_reports,
+            radar_data=radar_data,
         )
         
         return AnalysisReport(
