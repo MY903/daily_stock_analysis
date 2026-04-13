@@ -36,7 +36,7 @@ def get_5d_return(fetcher: DataFetcherManager, ticker: str, pred_date_str: str) 
         pred_date = datetime.strptime(pred_date_str, "%Y-%m-%d")
         window_end = pred_date + timedelta(days=15)  # 多取一些，保证覆盖节假日
 
-        df = fetcher.get_daily_data(
+        df, _source = fetcher.get_daily_data(
             ticker,
             start_date=pred_date_str,
             end_date=window_end.strftime("%Y-%m-%d"),

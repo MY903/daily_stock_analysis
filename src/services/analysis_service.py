@@ -173,7 +173,7 @@ class AnalysisService:
                 "technical_analysis": result.technical_analysis,
                 "fundamental_analysis": result.fundamental_analysis,
                 "risk_warning": result.risk_warning,
-                "ensemble_reports": result.dashboard.get("ensemble_reports") if result.dashboard else None,
+                "ensemble_reports": getattr(result, "dashboard", None) and result.dashboard.get("ensemble_reports"),
                 "radar_data": result.get_radar_data() if hasattr(result, "get_radar_data") else None,
             }
         }

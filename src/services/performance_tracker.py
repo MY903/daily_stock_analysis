@@ -10,8 +10,11 @@ class PerformanceTracker:
     """
     专家战绩追踪器：负责持久化大师们的预测结果，并计算动态权重。
     """
-    def __init__(self, db_path: str = "workspace/analyst_performance.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str = ""):
+        self.db_path = db_path or os.environ.get(
+            "ANALYST_PERF_DB",
+            os.path.join("workspace", "analyst_performance.db"),
+        )
         self._db_available = False
         try:
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -42,7 +45,11 @@ class PerformanceTracker:
     def record_prediction(self, analyst_id: str, ticker: str, signal: str, confidence: int) -> int:
         """
         记录一次专家的预测，返回新插入记录的 row ID。
+        DB 不可用时返回 -1 并记录警告，不抛出异常。
         """
+        if not self._db_available:
+            logger.warning("PerformanceTracker: DB unavailable, skipping record_prediction for %s/%s", analyst_id, ticker)
+            return -1
         date_str = datetime.now().strftime("%Y-%m-%d")
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -58,10 +65,14 @@ class PerformanceTracker:
         计算各大师的动态权重，并进行归一化处理。
         算法：raw_weight = (accuracy + 0.1) ^ 1.5，归一化后所有权重之和为 1.0。
         如果没有历史战绩，使用等权基准值（1.0）参与归一化，确保新专家不被惩罚。
+        DB 不可用时直接返回等权权重。
         """
-        raw_weights = {}
         analysts = ["warren_buffett", "li_lu", "paul_tudor_jones", "jensen_huang", "nassim_taleb"]
+        if not self._db_available:
+            equal = round(1.0 / len(analysts), 4)
+            return {aid: equal for aid in analysts}
 
+        raw_weights = {}
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -151,7 +162,11 @@ class PerformanceTracker:
         - signal=bearish 且 return < -1% -> 1 (Correct)
         - signal=neutral 且 |return| < 2% -> 1 (Correct)
         - 其他 -> 0 (Wrong)
+        DB 不可用时跳过并记录警告。
         """
+        if not self._db_available:
+            logger.warning("PerformanceTracker: DB unavailable, skipping backfill_result for record %s", record_id)
+            return
         with sqlite3.connect(self.db_path, isolation_level='IMMEDIATE') as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT signal FROM track_record WHERE id = ? AND is_correct IS NULL", (record_id,))
