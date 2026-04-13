@@ -810,6 +810,8 @@ def _build_analysis_report(
             dividend_metrics=extracted_fundamental.get("dividend_metrics"),
             belong_boards=extracted_boards.get("belong_boards"),
             sector_rankings=extracted_boards.get("sector_rankings"),
+            ensemble_reports=details_data.get("ensemble_reports"),
+            radar_data=details_data.get("radar_data"),
         )
 
     return AnalysisReport(
