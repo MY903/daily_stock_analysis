@@ -12,8 +12,14 @@ class PerformanceTracker:
     """
     def __init__(self, db_path: str = "workspace/analyst_performance.db"):
         self.db_path = db_path
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self._init_db()
+        self._db_available = False
+        try:
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            self._init_db()
+            self._db_available = True
+        except Exception as e:
+            logger.warning("PerformanceTracker: DB init failed, falling back to in-memory mode: %s", e)
+            self._records: dict = {}
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
@@ -93,6 +99,9 @@ class PerformanceTracker:
         """
         获取大师们的详细战绩统计。
         """
+        if not self._db_available:
+            return []
+
         performance = []
         analysts = {
             "warren_buffett": "巴菲特",
@@ -101,7 +110,7 @@ class PerformanceTracker:
             "jensen_huang": "黄仁勋",
             "nassim_taleb": "塔勒布"
         }
-        
+
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()

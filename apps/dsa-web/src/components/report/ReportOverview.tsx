@@ -348,8 +348,10 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
           {/* 专家共识投票 */}
           <MasterVotingDisk reports={details?.ensembleReports} />
           
-          {/* 专家胜率榜单 */}
-          <ExpertLeaderboard />
+          {/* 专家胜率榜单：仅在有集成报告时展示，避免只读容器触发 DB 请求 */}
+          {details?.ensembleReports && details.ensembleReports.length > 0 && (
+            <ExpertLeaderboard />
+          )}
         </div>
       </div>
     </div>

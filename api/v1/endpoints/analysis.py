@@ -345,6 +345,7 @@ def _handle_sync_analysis(
             force_refresh=request.force_refresh,
             query_id=query_id,
             send_notification=getattr(request, "notify", True),
+            analysis_mode=getattr(request, "analysis_mode", None),
         )
 
         if result is None:
