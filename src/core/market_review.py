@@ -76,18 +76,27 @@ def run_market_review(
         if override_region is not None
         else (getattr(config, 'market_review_region', 'cn') or 'cn')
     )
-    if region not in ('cn', 'us', 'hk', 'both'):
-        region = 'cn'
+    _ALL_MARKETS = [('cn', 'cn_title', 'A 股'), ('hk', 'hk_title', '港股'), ('us', 'us_title', '美股')]
+    _VALID_SINGLES = {'cn', 'us', 'hk'}
+
+    # Determine which markets to run.
+    # region can be: 'cn', 'hk', 'us', 'both', or a comma-joined subset like 'cn,us'.
+    if ',' in region:
+        run_markets = [m.strip() for m in region.split(',') if m.strip() in _VALID_SINGLES]
+    elif region == 'both':
+        run_markets = list(_VALID_SINGLES)
+    elif region in _VALID_SINGLES:
+        run_markets = [region]
+    else:
+        run_markets = ['cn']
 
     try:
-        if region == 'both':
-            # 顺序执行各市场，合并报告
+        if len(run_markets) > 1:
+            # 多市场顺序执行，合并报告
             parts = []
-            for mkt, title_key, label in [
-                ('cn', 'cn_title', 'A 股'),
-                ('hk', 'hk_title', '港股'),
-                ('us', 'us_title', '美股'),
-            ]:
+            for mkt, title_key, label in _ALL_MARKETS:
+                if mkt not in run_markets:
+                    continue
                 logger.info("生成 %s 大盘复盘报告...", label)
                 mkt_analyzer = MarketAnalyzer(
                     search_service=search_service, analyzer=analyzer, region=mkt

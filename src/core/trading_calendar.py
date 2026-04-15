@@ -205,10 +205,10 @@ def compute_effective_region(
         config_region = "cn"
     if config_region in ("cn", "hk", "us"):
         return config_region if config_region in open_markets else ""
-    # both
+    # both: return only the markets that are actually open today
     parts = [m for m in ("cn", "hk", "us") if m in open_markets]
     if not parts:
         return ""
     if len(parts) == 1:
         return parts[0]
-    return "both"
+    return ",".join(parts)
