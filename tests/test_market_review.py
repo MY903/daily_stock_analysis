@@ -72,6 +72,8 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
         notifier = self._make_notifier()
         cn_analyzer = MagicMock()
         cn_analyzer.run_daily_review.return_value = "CN body"
+        hk_analyzer = MagicMock()
+        hk_analyzer.run_daily_review.return_value = "HK body"
         us_analyzer = MagicMock()
         us_analyzer.run_daily_review.return_value = "US body"
 
@@ -82,12 +84,13 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
         ), patch.object(
             market_review_module,
             "MarketAnalyzer",
-            side_effect=[cn_analyzer, us_analyzer],
+            side_effect=[cn_analyzer, hk_analyzer, us_analyzer],
         ):
             result = run_market_review(notifier, send_notification=False)
 
         self.assertIn("# A-share Market Recap\n\nCN body", result)
-        self.assertIn("> US market recap follows", result)
+        self.assertIn("# HK Market Recap\n\nHK body", result)
+        self.assertIn("> Next market recap follows", result)
         self.assertIn("# US Market Recap\n\nUS body", result)
         saved_content = notifier.save_report_to_file.call_args.args[0]
         self.assertTrue(saved_content.startswith("# 🎯 Market Review\n\n"))
