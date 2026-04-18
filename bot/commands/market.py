@@ -74,7 +74,7 @@ class MarketCommand(BotCommand):
         try:
             from src.config import get_config
             from src.notification import NotificationService
-            from src.market_analyzer import MarketAnalyzer
+            from src.core.market_review import run_market_review
             from src.search_service import SearchService
             from src.analyzer import GeminiAnalyzer
 
@@ -101,22 +101,15 @@ class MarketCommand(BotCommand):
             if config.gemini_api_key or config.openai_api_key:
                 analyzer = GeminiAnalyzer()
 
-            # 读取配置中的市场区域，与定时任务/CLI 保持一致
-            region = getattr(config, 'market_review_region', 'cn')
-
-            # 执行复盘
-            market_analyzer = MarketAnalyzer(
-                search_service=search_service,
+            # 委托给 run_market_review，正确处理 both / 逗号分隔等多市场路由
+            review_report = run_market_review(
+                notifier=notifier,
                 analyzer=analyzer,
-                region=region,
+                search_service=search_service,
+                send_notification=True,
             )
 
-            review_report = market_analyzer.run_daily_review()
-
             if review_report:
-                # 推送结果
-                report_content = f"🎯 **大盘复盘**\n\n{review_report}"
-                notifier.send(report_content, email_send_to_all=True)
                 logger.info("[MarketCommand] 大盘复盘完成并已推送")
             else:
                 logger.warning("[MarketCommand] 大盘复盘返回空结果")
