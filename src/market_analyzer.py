@@ -183,6 +183,33 @@ class MarketAnalyzer:
         return self.profile.prompt_index_hint
 
     def _get_strategy_prompt_block(self) -> str:
+        if self.region == "hk" and self._get_review_language() == "en":
+            return """## Strategy Blueprint: Hong Kong Market Regime Strategy
+Focus on HSI trend, southbound flow dynamics, and sector rotation to define next-session risk posture.
+
+### Strategy Principles
+- Read market regime from HSI, HSTECH, and HSCEI alignment first.
+- Track southbound capital flow as a key sentiment driver.
+- Translate recap into actionable risk-on/risk-off stance with clear invalidation points.
+
+### Analysis Dimensions
+- Trend Regime: Classify the market as momentum, range, or risk-off.
+  - Are HSI/HSTECH/HSCEI directionally aligned
+  - Did volume confirm the move
+  - Are key index levels reclaimed or lost
+- Capital Flows: Map southbound flow and macro narrative into equity risk appetite.
+  - Southbound net flow direction and magnitude
+  - USD/HKD and China policy implications
+  - Breadth and leadership concentration
+- Sector Themes: Identify persistent leaders and vulnerable laggards.
+  - Tech/internet platform trend persistence
+  - Financials/property sensitivity to policy shifts
+  - Defensive vs growth factor rotation
+
+### Action Framework
+- Risk-on: broad index breakout with expanding southbound participation.
+- Neutral: mixed index signals; focus on selective relative strength.
+- Risk-off: failed breakouts and rising volatility; prioritize capital preservation."""
         if not (self.region == "cn" and self._get_review_language() == "en"):
             return self.strategy.to_prompt_block()
         return """## Strategy Blueprint: A-share Three-Phase Recap Strategy
@@ -214,6 +241,12 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
     def _get_strategy_markdown_block(self, review_language: str | None = None) -> str:
         review_language = review_language or self._get_review_language()
+        if self.region == "hk" and review_language == "en":
+            return """### 6. Strategy Framework
+- **Trend Regime**: Classify the market as momentum, range, or risk-off based on HSI/HSTECH/HSCEI alignment.
+- **Capital Flows**: Track southbound flow direction and macro narrative for risk appetite signals.
+- **Sector Themes**: Focus on tech/internet platform persistence and financials/property policy sensitivity.
+"""
         if not (self.region == "cn" and review_language == "en"):
             return self.strategy.to_markdown_block()
         return """### 6. Strategy Framework

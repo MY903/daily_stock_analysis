@@ -96,6 +96,60 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
         self.assertTrue(saved_content.startswith("# 🎯 Market Review\n\n"))
         notifier.send.assert_not_called()
 
+    def test_run_market_review_comma_joined_subset_cn_us(self) -> None:
+        """Regression: compute_effective_region("both", {"cn","us"}) -> "cn,us"
+        must produce A-share + US report without HK."""
+        notifier = self._make_notifier()
+        cn_analyzer = MagicMock()
+        cn_analyzer.run_daily_review.return_value = "CN body"
+        us_analyzer = MagicMock()
+        us_analyzer.run_daily_review.return_value = "US body"
+
+        with patch.object(
+            market_review_module,
+            "get_config",
+            return_value=SimpleNamespace(report_language="zh", market_review_region="cn"),
+        ), patch.object(
+            market_review_module,
+            "MarketAnalyzer",
+            side_effect=[cn_analyzer, us_analyzer],
+        ):
+            result = run_market_review(
+                notifier, send_notification=False, override_region="cn,us"
+            )
+
+        self.assertIn("# A股大盘复盘\n\nCN body", result)
+        self.assertIn("# 美股大盘复盘\n\nUS body", result)
+        self.assertNotIn("港股", result)
+        self.assertNotIn("HK", result)
+
+    def test_run_market_review_comma_joined_subset_cn_hk(self) -> None:
+        """Regression: compute_effective_region("both", {"cn","hk"}) -> "cn,hk"
+        must produce A-share + HK report without US."""
+        notifier = self._make_notifier()
+        cn_analyzer = MagicMock()
+        cn_analyzer.run_daily_review.return_value = "CN body"
+        hk_analyzer = MagicMock()
+        hk_analyzer.run_daily_review.return_value = "HK body"
+
+        with patch.object(
+            market_review_module,
+            "get_config",
+            return_value=SimpleNamespace(report_language="zh", market_review_region="cn"),
+        ), patch.object(
+            market_review_module,
+            "MarketAnalyzer",
+            side_effect=[cn_analyzer, hk_analyzer],
+        ):
+            result = run_market_review(
+                notifier, send_notification=False, override_region="cn,hk"
+            )
+
+        self.assertIn("# A股大盘复盘\n\nCN body", result)
+        self.assertIn("# 港股大盘复盘\n\nHK body", result)
+        self.assertNotIn("美股", result)
+        self.assertNotIn("US Market", result)
+
 
 if __name__ == "__main__":
     unittest.main()
