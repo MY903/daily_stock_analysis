@@ -378,8 +378,8 @@ class YfinanceFetcher(BaseFetcher):
         """获取港股主要指数行情（HSI、HSTECH、HSCEI），复用 _fetch_yf_ticker_data"""
         hk_indices = {
             'HSI': ('^HSI', '恒生指数'),
-            'HSTECH': ('^HSTECH', '恒生科技指数'),
-            'HSCEI': ('^HSCEI', '国企指数'),
+            'HSTECH': ('HSTECH.HK', '恒生科技指数'),
+            'HSCEI': ('^HSCE', '国企指数'),
         }
         results = []
         try:
