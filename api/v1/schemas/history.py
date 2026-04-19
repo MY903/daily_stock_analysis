@@ -9,7 +9,7 @@
 2. 定义分析报告完整模型
 """
 
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -140,10 +140,10 @@ class ReportSummary(BaseModel):
 class ReportStrategy(BaseModel):
     """策略点位区"""
     
-    ideal_buy: Optional[str] = Field(None, description="理想买入价")
-    secondary_buy: Optional[str] = Field(None, description="第二买入价")
-    stop_loss: Optional[str] = Field(None, description="止损价")
-    take_profit: Optional[str] = Field(None, description="止盈价")
+    ideal_buy: Optional[Union[str, int, float]] = Field(None, description="理想买入价")
+    secondary_buy: Optional[Union[str, int, float]] = Field(None, description="第二买入价")
+    stop_loss: Optional[Union[str, int, float]] = Field(None, description="止损价")
+    take_profit: Optional[Union[str, int, float]] = Field(None, description="止盈价")
 
 
 class ReportDetails(BaseModel):
