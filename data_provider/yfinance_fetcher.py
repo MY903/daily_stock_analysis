@@ -33,7 +33,7 @@ from tenacity import (
 
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, is_bse_code
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
-from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code, is_crypto_code
+from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code
 
 # 可选导入本地股票映射补丁，若缺失则使用空字典兜底
 try:
@@ -113,11 +113,6 @@ class YfinanceFetcher(BaseFetcher):
         # 美股：1-5 个大写字母（可选 .X 后缀），原样返回
         if is_us_stock_code(code):
             logger.debug(f"识别为美股代码: {code}")
-            return code
-
-        # 加密货币：BTC-USD, ETH-USD 等，yfinance 原生支持，原样返回作为 YF ticker
-        if is_crypto_code(code):
-            logger.debug(f"识别为加密货币: {code}")
             return code
 
         # 港股：hk前缀 -> .HK后缀
@@ -381,6 +376,11 @@ class YfinanceFetcher(BaseFetcher):
 
     def _get_hk_main_indices(self, yf) -> Optional[List[Dict[str, Any]]]:
         """获取港股主要指数行情（HSI、HSTECH、HSCEI），复用 _fetch_yf_ticker_data"""
+        # Yahoo Finance 港股指数符号映射：
+        # - HSI -> ^HSI
+        # - HSTECH -> HSTECH.HK（不是 ^HSTECH）
+        # - HSCEI -> ^HSCE（不是 ^HSCEI）
+        # 该映射由离线单测 tests/test_yfinance_hk_indices.py 固化，避免在线依赖导致非确定性失败。
         hk_indices = {
             'HSI': ('^HSI', '恒生指数'),
             'HSTECH': ('HSTECH.HK', '恒生科技指数'),

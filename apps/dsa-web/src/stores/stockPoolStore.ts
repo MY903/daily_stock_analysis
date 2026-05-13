@@ -24,7 +24,6 @@ type SubmitAnalysisOptions = {
   selectionSource?: SelectionSource;
   notify?: boolean;
   forceRefresh?: boolean;
-  analysisMode?: 'standard' | 'ensemble';
 };
 
 let reportRequestSeq = 0;
@@ -36,7 +35,6 @@ export interface StockPoolState {
   query: string;
   selectionSource: SelectionSource;
   notify: boolean;
-  analysisMode: 'standard' | 'ensemble';
   inputError?: string;
   duplicateError: string | null;
   error: ParsedApiError | null;
@@ -66,7 +64,6 @@ export interface StockPoolState {
   deleteSelectedHistory: () => Promise<void>;
   submitAnalysis: (options?: SubmitAnalysisOptions) => Promise<void>;
   setNotify: (notify: boolean) => void;
-  setAnalysisMode: (mode: 'standard' | 'ensemble') => void;
   syncTaskCreated: (task: TaskInfo) => void;
   syncTaskUpdated: (task: TaskInfo) => void;
   syncTaskFailed: (task: TaskInfo) => void;
@@ -78,7 +75,6 @@ const initialState = {
   query: '',
   selectionSource: 'manual' as SelectionSource,
   notify: true,
-  analysisMode: 'standard' as 'standard' | 'ensemble',
   inputError: undefined,
   duplicateError: null,
   error: null,
@@ -195,8 +191,6 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
   clearInlineMessages: () => set({ inputError: undefined, duplicateError: null }),
 
   setNotify: (notify) => set({ notify }),
-
-  setAnalysisMode: (mode) => set({ analysisMode: mode }),
 
   openMarkdownDrawer: () => set({ markdownDrawerOpen: true }),
 
@@ -316,7 +310,6 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     const originalQuery = (options?.originalQuery ?? state.query).trim();
     const notify = options?.notify ?? state.notify;
     const forceRefresh = options?.forceRefresh ?? false;
-    const analysisMode = options?.analysisMode ?? state.analysisMode;
 
     if (!stockCodeInput) {
       set({ inputError: '请输入股票代码', duplicateError: null });
@@ -355,7 +348,6 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
         selectionSource,
         notify,
         forceRefresh,
-        analysisMode,
       });
 
       if (requestId !== analyzeRequestSeq) {

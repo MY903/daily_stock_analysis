@@ -35,8 +35,8 @@ def _build_optional_module_stubs() -> dict[str, ModuleType]:
     return stubs
 
 
-with patch.dict(sys.modules, _build_optional_module_stubs()):
-    import src.core.market_review as market_review_module
+sys.modules.update(_build_optional_module_stubs())
+import src.core.market_review as market_review_module
 
 run_market_review = market_review_module.run_market_review
 
@@ -67,6 +67,7 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
         sent_content = notifier.send.call_args.args[0]
         self.assertTrue(sent_content.startswith("🎯 Market Review\n\n"))
         self.assertTrue(notifier.send.call_args.kwargs["email_send_to_all"])
+        self.assertEqual(notifier.send.call_args.kwargs["route_type"], "report")
 
     def test_run_market_review_merges_both_regions_with_english_wrappers(self) -> None:
         notifier = self._make_notifier()

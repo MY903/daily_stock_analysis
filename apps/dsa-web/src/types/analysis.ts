@@ -18,6 +18,17 @@ export interface AnalysisRequest {
   analysisMode?: 'standard' | 'ensemble';
 }
 
+export interface MarketReviewRequest {
+  sendNotification?: boolean;
+}
+
+export interface MarketReviewAccepted {
+  status: 'accepted';
+  message: string;
+  sendNotification: boolean;
+  taskId?: string;
+}
+
 // ============ Report Types ============
 
 export type ReportLanguage = 'zh' | 'en';
@@ -166,6 +177,7 @@ export interface TaskStatus {
   status: 'pending' | 'processing' | 'completed' | 'failed';
   progress?: number;
   result?: AnalysisResult;
+  marketReviewReport?: string;
   error?: string;
   stockName?: string;
   originalQuery?: string;
