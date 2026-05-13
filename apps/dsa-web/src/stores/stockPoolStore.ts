@@ -64,6 +64,8 @@ export interface StockPoolState {
   deleteSelectedHistory: () => Promise<void>;
   submitAnalysis: (options?: SubmitAnalysisOptions) => Promise<void>;
   setNotify: (notify: boolean) => void;
+  analysisMode?: 'standard' | 'ensemble';
+  setAnalysisMode: (mode: 'standard' | 'ensemble') => void;
   syncTaskCreated: (task: TaskInfo) => void;
   syncTaskUpdated: (task: TaskInfo) => void;
   syncTaskFailed: (task: TaskInfo) => void;
@@ -90,6 +92,7 @@ const initialState = {
   isLoadingReport: false,
   activeTasks: [] as TaskInfo[],
   markdownDrawerOpen: false,
+  analysisMode: undefined,
 };
 
 function buildHistoryParams(page: number) {
@@ -191,6 +194,8 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
   clearInlineMessages: () => set({ inputError: undefined, duplicateError: null }),
 
   setNotify: (notify) => set({ notify }),
+
+  setAnalysisMode: (mode) => set({ analysisMode: mode }),
 
   openMarkdownDrawer: () => set({ markdownDrawerOpen: true }),
 
