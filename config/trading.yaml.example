@@ -1,0 +1,61 @@
+# TQQQ 自动交易机器人配置
+# 复制此文件为 trading.yaml 并填入实际参数
+
+tiger:
+  # Tiger OpenAPI 配置文件路径（相对于项目根目录）
+  config_path: "tiger_openapi_config.properties"
+  # 交易环境：PAPER（模拟盘）/ LIVE（实盘）
+  environment: "PAPER"
+
+trading:
+  symbol: "TQQQ"
+  market: "US"
+  # 是否自动下单（false = 仅告警模式）
+  auto_trade: false
+  entry:
+    # 买入触发价（当价格 <= 此值时触发）
+    trigger_price: 74.61
+    # 买入数量（股）
+    quantity: 35
+    # 订单类型：LMT（限价单）
+    order_type: "LMT"
+    # 有效期：GTC（撤销前有效，最长 90 天）
+    time_in_force: "GTC"
+  take_profit:
+    # 止盈百分比（基于买入价）
+    percentage: 0.04
+    order_type: "LMT"
+    time_in_force: "GTC"
+  stop_loss:
+    # 止损百分比（基于买入价）
+    percentage: 0.032
+    # 止损限价单
+    order_type: "STP_LMT"
+    # 限价偏移（确保成交）
+    limit_offset: 0.005
+    time_in_force: "GTC"
+
+bot:
+  # 卖出后冷却时间（秒）
+  cooldown_seconds: 300
+  # 允许盘前交易
+  pre_market: true
+  # 允许盘后交易
+  post_market: true
+  # 订单状态轮询间隔（秒）
+  poll_interval: 30
+  # 防重复下单冷却（秒）
+  signal_cooldown: 60
+
+notification:
+  enabled: true
+  platform: "feishu"
+  # 飞书 Webhook URL
+  webhook_url: ""
+  # 飞书 Webhook 签名密钥（可选）
+  webhook_secret: ""
+
+logging:
+  level: "INFO"
+  log_dir: "./logs"
+  data_dir: "./data"

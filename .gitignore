@@ -79,5 +79,10 @@ static/
 /apps/dsa-desktop/dist/
 /apps/dsa-desktop/node_modules/
 
+# Trading bot credentials (NEVER commit)
+*.pem
+*.properties
+config/trading.yaml
+
 # Qoder IDE cache
 .qoder/

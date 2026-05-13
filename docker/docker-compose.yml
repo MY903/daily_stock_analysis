@@ -66,3 +66,30 @@ services:
     # 若使用 network_mode: host，则以下 ports 映射无效，端口由 command 中的 --port 指定
     ports:
       - "${API_PORT:-8000}:${API_PORT:-8000}"
+
+  # TQQQ 自动交易机器人
+  trading-bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.trading
+    container_name: tqqq-trading-bot
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    volumes:
+      - ../config:/app/config:ro
+      - ../logs:/app/logs
+      - ../data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M

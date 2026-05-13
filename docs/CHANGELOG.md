@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] Docker 发布工作流收敛为更清晰的正式发布与手动补发链路，并统一官方 Docker Hub 镜像名为 `zhulinsen/daily_stock_analysis`
 - [文档] 补充官方镜像拉取、`docker run` 用法与 `.env` / 数据目录映射说明，不再仅覆盖 Compose 部署路径
 - [修复] Pipeline Agent 工具主路径改为 DB-first 加载 K 线，消除同一只股票 9x5=45 次重复 HTTP 请求 (Fixes #1066)
+- [新功能] 新增 TQQQ 自动交易机器人模块（src/trading/），基于 Tiger Brokers OpenAPI 实现实时行情监控、状态机驱动的短线摆动策略、限价/止盈/止损订单管理，支持模拟盘和实盘环境切换，独立入口 trading_main.py，部署方式为群晖 NAS Docker
 - [修复] Pipeline Agent 执行前按需预热 240 天历史到 DB，正常情况下工具调用无需重复网络请求
 - [修复] 冻结 target_date 通过 ContextVar 透传到 Pipeline Agent 工具线程，消除跨收盘边界时间漂移
 - [文档] 修正 `feishu_sender.py` 中飞书自定义机器人 Webhook 消息格式示例为 interactive card JSON，并补充飞书自动化 Webhook 触发器配置教程（参数 JSON 与 `card.elements[0].text.content` 字段映射）。
