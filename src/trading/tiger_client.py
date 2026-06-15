@@ -15,6 +15,7 @@ from tigeropen.common.util.contract_utils import stock_contract
 from tigeropen.common.util.order_utils import limit_order, stop_limit_order
 from tigeropen.common.consts import Market, Language
 
+from config.settings import settings
 from src.trading.config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -38,16 +39,27 @@ class TigerClient:
         """初始化 API 连接"""
         tiger_cfg = self._config.tiger
 
-        config_path = tiger_cfg.absolute_config_path
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"Tiger OpenAPI 配置文件不存在: {config_path}\n"
-                f"请将 tiger_openapi_config.properties 放在: {config_path}"
-            )
-
-        # 根据环境选择 sandbox 或 production
-        self._client_config = TigerOpenClientConfig(props_path=str(config_path))
-        self._client_config.language = Language.zh_CN
+        # 优先从 .env 加载凭据
+        if settings.has_tiger_creds:
+            self._client_config = TigerOpenClientConfig()
+            self._client_config.tiger_id = settings.TIGER_TIGER_ID
+            self._client_config.private_key = settings.TIGER_PRIVATE_KEY
+            self._client_config.account = settings.TIGER_ACCOUNT
+            self._client_config.token = settings.TIGER_TOKEN
+            self._client_config.license = settings.TIGER_LICENSE
+            self._client_config.language = Language.zh_CN
+            logger.info("Tiger API 凭据从 .env 加载")
+        else:
+            # 后备：从 .properties 文件加载
+            config_path = tiger_cfg.absolute_config_path
+            if not config_path.exists():
+                raise FileNotFoundError(
+                    f"Tiger OpenAPI 配置文件不存在: {config_path}\n"
+                    f"请将 tiger_openapi_config.properties 放在: {config_path}"
+                )
+            self._client_config = TigerOpenClientConfig(props_path=str(config_path))
+            self._client_config.language = Language.zh_CN
+            logger.info("Tiger API 凭据从 .properties 文件加载")
 
         if not tiger_cfg.is_live:
             # 模拟盘

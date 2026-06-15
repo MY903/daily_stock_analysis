@@ -53,6 +53,16 @@ except ImportError:
     get_feishu_stream_client = lambda: None
     start_feishu_stream_background = lambda: False
 
+# 飞书互动卡片 Bot（无额外依赖，始终可用）
+from bot.platforms.lark_interactive import (
+    LarkCardBuilder,
+    LarkInteractiveBot,
+    CARD_SIGNAL_CONFIRM,
+    CARD_EXECUTION_RESULT,
+    CARD_RISK_INTERCEPT,
+    CARD_SIGNAL_EXPIRED,
+)
+
 __all__ = [
     'BotPlatform',
     'DingtalkPlatform',
@@ -70,4 +80,11 @@ __all__ = [
     'get_feishu_stream_client',
     'start_feishu_stream_background',
     'FEISHU_SDK_AVAILABLE',
+    # 飞书互动卡片
+    'LarkCardBuilder',
+    'LarkInteractiveBot',
+    'CARD_SIGNAL_CONFIRM',
+    'CARD_EXECUTION_RESULT',
+    'CARD_RISK_INTERCEPT',
+    'CARD_SIGNAL_EXPIRED',
 ]

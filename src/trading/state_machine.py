@@ -28,11 +28,15 @@ class StateMachine:
 
     状态转换图:
         IDLE → BUY_PENDING → HOLDING → SELL_PENDING → COOLDOWN → IDLE
+
+    支持可选的 symbol 参数，用于多标的状态隔离持久化。
     """
 
-    def __init__(self, data_dir: str = "./data"):
+    def __init__(self, data_dir: str = "./data", symbol: Optional[str] = None):
         self._state = TradingState.IDLE
         self._data_dir = Path(data_dir)
+        if symbol:
+            self._data_dir = self._data_dir / f"symbol_{symbol}"
         self._state_file = self._data_dir / "trading_state.json"
         self._context: Dict[str, Any] = {}
         self._cooldown_start: float = 0
@@ -213,3 +217,28 @@ class StateMachine:
             "context": self._context,
             "cooldown_remaining": self.get_cooldown_remaining(),
         }
+
+
+class TradingStateMachine(StateMachine):
+    """支持多标的交易状态机
+
+    每个实例管理一个标的的独立状态，状态持久化到独立子目录。
+    兼容现有的单标的 StateMachine 使用方式（通过 TradingStateMachine 适配器）。
+    """
+
+    def __init__(self, symbol: str, data_dir: str = "./data"):
+        self.symbol = symbol
+        super().__init__(data_dir=data_dir, symbol=symbol)
+
+    def get_state(self) -> TradingState:
+        return self.state
+
+    def set_state(self, state: TradingState, reason: str = "") -> None:
+        if state == TradingState.IDLE:
+            self.force_idle(reason)
+        else:
+            logger.warning(
+                "set_state() only supports IDLE directly; "
+                "symbol=%s, requested=%s, use transition methods",
+                self.symbol, state.value,
+            )

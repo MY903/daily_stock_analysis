@@ -16,6 +16,7 @@
 
 import csv
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timezone, timedelta
@@ -162,7 +163,12 @@ class QuoteMonitor:
                              self._consecutive_failures)
 
     def _fetch_price(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """获取价格数据（yfinance -> Stooq 多级 fallback）
+        """获取价格数据（yfinance -> Sina -> Stooq 多级 fallback）
+
+        国内数据源优先级（确保从中国网络环境可访问）：
+        1. yfinance fast_info + history（海外/VPN 可用时优先）
+        2. 新浪财经美股接口 hq.sinajs.cn（国内可直连）
+        3. Stooq CSV 海外兜底
 
         Returns:
             包含 latest_price 的行情字典，失败返回 None
@@ -172,7 +178,12 @@ class QuoteMonitor:
         if quote:
             return quote
 
-        # 第二优先：Stooq CSV 兜底
+        # 第二优先：新浪财经美股接口（国内可直连）
+        quote = self._fetch_via_sina(symbol)
+        if quote:
+            return quote
+
+        # 第三优先：Stooq CSV 兜底
         quote = self._fetch_via_stooq(symbol)
         if quote:
             return quote
@@ -247,6 +258,70 @@ class QuoteMonitor:
 
         except Exception as e:
             logger.debug("[yfinance] 获取 %s 失败: %s", symbol, e)
+            return None
+
+    def _fetch_via_sina(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """通过新浪财经美股接口获取行情（国内可直连）
+
+        接口格式: https://hq.sinajs.cn/list=gb_<symbol>
+        响应格式: var hq_str_gb_<symbol>="名称,最新价,涨跌幅%,更新时间,涨跌额,开盘,最高,最低,..."
+        字段(已验证): 0=名称, 1=最新价, 5=开盘, 6=最高, 7=最低, 10=成交量
+        """
+        try:
+            code = symbol.strip().upper()
+            url = f"https://hq.sinajs.cn/list=gb_{code.lower()}"
+            request = Request(
+                url,
+                headers={
+                    "Referer": "https://finance.sina.com.cn",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                },
+            )
+
+            with urlopen(request, timeout=15) as response:
+                payload = response.read().decode("gbk", "ignore").strip()
+
+            if not payload or '""' in payload:
+                return None
+
+            # 提取引号内的数据
+            m = re.search(r'"(.+?)"', payload)
+            if not m:
+                return None
+
+            fields = m.group(1).split(',')
+            if len(fields) < 11:
+                return None
+
+            # 新浪美股gb_格式字段索引（实测验证）:
+            # [0]=名称, [1]=最新价, [5]=开盘, [6]=最高, [7]=最低, [10]=成交量
+            price_text = fields[1].strip()
+            if not price_text or price_text == '0.000':
+                return None
+
+            price = float(price_text)
+            open_price = float(fields[5]) if fields[5].strip() not in ('', '0.000') else None
+            high = float(fields[6]) if fields[6].strip() not in ('', '0.000') else None
+            low = float(fields[7]) if fields[7].strip() not in ('', '0.000') else None
+            volume = int(float(fields[10])) if fields[10].strip() not in ('', '0') else None
+
+            quote_data = {
+                "symbol": code,
+                "latest_price": price,
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "volume": volume,
+                "source": "sina",
+                "timestamp": time.time(),
+            }
+
+            logger.debug("[Sina] %s 价格: %.2f", code, price)
+            return quote_data
+
+        except Exception as e:
+            logger.debug("[Sina] 获取 %s 失败: %s", symbol, e)
             return None
 
     def _fetch_via_stooq(self, symbol: str) -> Optional[Dict[str, Any]]:

@@ -160,12 +160,19 @@ class TradingBot:
 
     def _handle_buy_signal(self, sig) -> None:
         """处理买入信号"""
+        # 防重复：signal_cooldown 内不重复触发通知和下单
+        if not self._order_manager.can_place_order("buy"):
+            logger.debug("买入信号冷却中，跳过重复触发")
+            return
+
         entry = self._config.trading.entry
+        # 使用策略计算的动态触发价（百分比模式）或固定触发价
+        trigger_price = sig.trigger_price or entry.trigger_price
 
         # 通知
         self._notifier.notify_buy_signal(
             price=sig.price,
-            trigger_price=entry.trigger_price,
+            trigger_price=trigger_price,
             quantity=entry.quantity,
             auto_trade=self._config.trading.auto_trade,
         )
@@ -175,12 +182,17 @@ class TradingBot:
         if order_id is not None:
             self._state_machine.transition_to_buy_pending(
                 order_id=order_id,
-                price=entry.trigger_price,
+                price=trigger_price,
                 quantity=entry.quantity,
             )
 
     def _handle_take_profit_signal(self, sig) -> None:
         """处理止盈信号"""
+        # 防重复：signal_cooldown 内不重复触发
+        if not self._order_manager.can_place_order("take_profit"):
+            logger.debug("止盈信号冷却中，跳过重复触发")
+            return
+
         context = self._state_machine.context
         quantity = context.get("quantity", 0)
         fill_price = context.get("fill_price", 0)
@@ -208,6 +220,11 @@ class TradingBot:
 
     def _handle_stop_loss_signal(self, sig) -> None:
         """处理止损信号"""
+        # 防重复：signal_cooldown 内不重复触发
+        if not self._order_manager.can_place_order("stop_loss"):
+            logger.debug("止损信号冷却中，跳过重复触发")
+            return
+
         context = self._state_machine.context
         quantity = context.get("quantity", 0)
         fill_price = context.get("fill_price", 0)
@@ -338,9 +355,14 @@ class TradingBot:
         # 单笔损失不超过 5% 校验
         entry = trading.entry
         sl = trading.stop_loss
-        max_loss = entry.trigger_price * entry.quantity * sl.percentage
-        # 这里简化处理，实际应查询账户资产
-        logger.info("预估单笔最大损失: $%.2f", max_loss)
+        # 百分比模式用开盘价估算，固定模式直接用 trigger_price
+        est_price = entry.trigger_price
+        if entry.trigger_percentage > 0 and self._monitor.latest_quote:
+            open_price = self._monitor.latest_quote.get("open")
+            if open_price:
+                est_price = open_price * (1 - entry.trigger_percentage)
+        max_loss = est_price * entry.quantity * sl.percentage
+        logger.info("预估单笔最大损失: $%.2f (基于估算买入价 $%.2f)", max_loss, est_price)
 
     def _handle_signal(self, signum, frame) -> None:
         """信号处理（SIGINT/SIGTERM）"""

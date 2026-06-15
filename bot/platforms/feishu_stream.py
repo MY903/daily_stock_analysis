@@ -599,13 +599,21 @@ class FeishuStreamClient:
         encrypt_key = getattr(config, 'feishu_encrypt_key', '') or ''
         verification_token = getattr(config, 'feishu_verification_token', '') or ''
 
-        event_handler = lark.EventDispatcherHandler.builder(
+        from bot.platforms.lark_interactive import FeishuCardActionHandler
+
+        event_handler_builder = lark.EventDispatcherHandler.builder(
             encrypt_key=encrypt_key,
             verification_token=verification_token,
             level=lark.LogLevel.WARNING
         ).register_p2_im_message_receive_v1(
             handler.handle_message
-        ).build()
+        )
+
+        # 注册卡片按钮回调事件处理器
+        card_handler = FeishuCardActionHandler(reply_client=self._reply_client)
+        card_handler.register_card_handler(event_handler_builder)
+
+        event_handler = event_handler_builder.build()
 
         return event_handler
 

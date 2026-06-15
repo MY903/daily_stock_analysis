@@ -9,6 +9,8 @@ tiger:
 
 trading:
   symbol: "TQQQ"
+  # 多标的列表（可选，兼容单标的 symbol 字段）
+  # symbols: ["TQQQ", "SOXL", "FNGU"]
   market: "US"
   # 是否自动下单（false = 仅告警模式）
   auto_trade: false
@@ -54,6 +56,13 @@ notification:
   webhook_url: ""
   # 飞书 Webhook 签名密钥（可选）
   webhook_secret: ""
+  # --- 通知抑制策略（降低重复通知干扰） ---
+  # 同类通知最小间隔（秒），0=不限制
+  cooldown_seconds: 300
+  # 同类信号最多通知次数，0=不限制
+  max_notifications_per_signal: 1
+  # 通知计数重置周期（小时）
+  reset_hours: 24
 
 logging:
   level: "INFO"

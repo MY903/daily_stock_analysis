@@ -7,9 +7,11 @@ import os
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import yaml
+
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +23,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 class TigerConfig:
     """Tiger OpenAPI 连接配置"""
     config_path: str = "tiger_openapi_config.properties"
-    environment: str = "PAPER"  # PAPER / LIVE
+
+    @property
+    def environment(self) -> str:
+        """从 settings.TIGER_ENV 派生（单一权威源），映射：SANDBOX/PAPER→PAPER, PROD→LIVE"""
+        raw = settings.TIGER_ENV.upper()
+        return "LIVE" if raw == "PROD" else "PAPER"
 
     @property
     def is_live(self) -> bool:
-        return self.environment.upper() == "LIVE"
+        """是否为实盘环境"""
+        return self.environment == "LIVE"
 
     @property
     def absolute_config_path(self) -> Path:
@@ -39,6 +47,7 @@ class TigerConfig:
 class EntryConfig:
     """买入配置"""
     trigger_price: float = 74.61
+    trigger_percentage: float = 0.04  # 开盘下浮百分比买入，0表示禁用
     quantity: int = 35
     order_type: str = "LMT"
     time_in_force: str = "GTC"
@@ -65,6 +74,7 @@ class StopLossConfig:
 class TradingConfig:
     """交易策略配置"""
     symbol: str = "TQQQ"
+    symbols: List[str] = field(default_factory=lambda: ["TQQQ"])
     market: str = "US"
     auto_trade: bool = False
     entry: EntryConfig = field(default_factory=EntryConfig)
@@ -89,6 +99,9 @@ class NotificationConfig:
     platform: str = "feishu"
     webhook_url: str = ""
     webhook_secret: str = ""
+    cooldown_seconds: int = 300  # 同类通知最小间隔（秒），0=不限制
+    max_notifications_per_signal: int = 1  # 同类信号最多通知次数，0=不限制
+    reset_hours: float = 24  # 通知计数重置周期（小时）
 
 
 @dataclass
@@ -112,7 +125,7 @@ class AppConfig:
 def _merge_env_overrides(config: AppConfig) -> None:
     """环境变量覆盖配置（优先级高于 YAML）"""
     env_map = {
-        "TRADING_TIGER_ENV": ("tiger", "environment"),
+        # TRADING_TIGER_ENV 已废弃 — environment 现在从 settings.TIGER_ENV 派生
         "TRADING_TIGER_CONFIG_PATH": ("tiger", "config_path"),
         "TRADING_SYMBOL": ("trading", "symbol"),
         "TRADING_AUTO_TRADE": ("trading", "auto_trade"),
@@ -120,9 +133,14 @@ def _merge_env_overrides(config: AppConfig) -> None:
         "TRADING_ENTRY_QTY": ("trading.entry", "quantity"),
         "TRADING_TP_PCT": ("trading.take_profit", "percentage"),
         "TRADING_SL_PCT": ("trading.stop_loss", "percentage"),
+        "TRADING_NOTIFICATION_ENABLED": ("notification", "enabled"),
+        "TRADING_NOTIFICATION_COOLDOWN": ("notification", "cooldown_seconds"),
+        "TRADING_NOTIFICATION_MAX": ("notification", "max_notifications_per_signal"),
+        "TRADING_NOTIFICATION_RESET_HOURS": ("notification", "reset_hours"),
         "TRADING_WEBHOOK_URL": ("notification", "webhook_url"),
         "TRADING_WEBHOOK_SECRET": ("notification", "webhook_secret"),
         "TRADING_LOG_LEVEL": ("logging", "level"),
+        "TRADING_SYMBOLS": ("trading", "symbols"),
     }
 
     for env_key, (section, attr) in env_map.items():
@@ -146,6 +164,9 @@ def _merge_env_overrides(config: AppConfig) -> None:
             converted = int(value)
         elif isinstance(current, float):
             converted = float(value)
+        elif isinstance(current, list):
+            # 逗号分隔列表: "AAPL,GOOGL,MSFT"
+            converted = [v.strip() for v in value.split(",") if v.strip()]
         else:
             converted = value
 
