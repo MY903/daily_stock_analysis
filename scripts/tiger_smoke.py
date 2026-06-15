@@ -56,7 +56,7 @@ def main() -> int:
     try:
         from src.trading.config import AppConfig, TigerConfig
 
-        tiger_cfg = TigerConfig(environment="PAPER")
+        tiger_cfg = TigerConfig()  # environment derived from settings.TIGER_ENV
         config = AppConfig(tiger=tiger_cfg)
     except ImportError as e:
         logger.error("Cannot import AppConfig/TigerConfig: %s", e)

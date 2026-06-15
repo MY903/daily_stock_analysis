@@ -1,0 +1,11 @@
+# Phase 2 Dry-Run — 2026-06-15 18:24:28
+Exit code: 0
+
+[PASS] Step 1: Import settings: config.settings loaded
+[PASS] Step 1: TRADING_MODE check: TRADING_MODE=SANDBOX — safe
+[PASS] Step 2: Pipeline instantiation: QuantWeaselPipeline() OK
+[WARN] Step 2: generate_and_push_signal: Signal object created and audit-logged, but Lark card push returned False (expected if LARK_DEFAULT_CHAT_ID not configured). Will test confirmation path with a synthetic signal.
+[PASS] Step 3: Manual signal creation (fallback): Fallback signal created and audit-logged: id=08d05cf7-9887-4ec3-8350-78d3ecfdb178
+[PASS] Step 4: Execution result: success=True, order_id=dry-run-order-1781519068, message='[SANDBOX] 模拟执行成功'
+
+Summary: 5 PASS, 1 WARN, 0 FAIL
