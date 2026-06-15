@@ -8,11 +8,20 @@
     python trading_main.py --status           # 查看当前状态
 """
 
+import warnings
+
 import argparse
 import json
 import logging
 import sys
 from pathlib import Path
+
+warnings.warn(
+    "DEPRECATED: TradingBot will be removed in a future version. "
+    "Use QuantWeaselPipeline (src/trading/pipeline.py) instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 # 确保项目根目录在 sys.path 中
 project_root = Path(__file__).resolve().parent
@@ -152,4 +161,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import sys
+    print(
+        "DEPRECATED: TradingBot is deprecated. Use QuantWeaselPipeline (src/trading/pipeline.py) instead.",
+        file=sys.stderr,
+    )
     main()

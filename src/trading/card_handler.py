@@ -5,7 +5,7 @@
 """
 
 import logging
-from typing import Any, Optional, Callable
+from typing import Any, Optional, Callable, Awaitable
 from datetime import datetime
 
 from src.trading.signal import Signal, SignalStatus, ConfirmResult, ConfirmAction
@@ -99,8 +99,8 @@ class SignalConfirmHandler:
                 logger.info("已发送拒绝卡片: signal=%s chat=%s", signal_id, chat_id)
         return result
 
-    def on_execution(self, handler: Callable[[Signal], None]):
-        """注册执行回调（确认后触发）"""
+    def on_execution(self, handler: Callable[[Signal], Awaitable[None]]):
+        """注册执行回调（确认后触发），支持异步处理器"""
         self._execution_handler = handler
 
     async def push_signal_card(self, signal: Signal, chat_id: str = "") -> bool:
@@ -186,7 +186,7 @@ class SignalConfirmHandler:
                 signal.quantity = modified_quantity
             signal.status = SignalStatus.CONFIRMED
             if self._execution_handler:
-                self._execution_handler(signal)
+                await self._execution_handler(signal)
                 logger.info("信号确认，触发执行: %s", signal_id)
             else:
                 logger.warning("信号已确认但未注册执行处理器: %s", signal_id)

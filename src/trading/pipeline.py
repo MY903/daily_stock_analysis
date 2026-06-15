@@ -47,6 +47,10 @@ class QuantWeaselPipeline:
         self._card_handler = SignalConfirmHandler(
             self._bot, self._audit_logger, reply_client=reply_client,
         )
+        # Wire L3 card confirm callback → process_confirmed_signal (end-to-end)
+        self._card_handler.on_execution(
+            lambda signal: self.process_confirmed_signal(signal.signal_id)
+        )
         self._execution_engine = ExecutionEngine(
             self._tiger_client, self._risk_manager, self._audit_logger
         )
@@ -106,6 +110,11 @@ class QuantWeaselPipeline:
 
         # 重建 Signal 对象
         signal = Signal.model_validate_json(history["signal_json"])
+
+        # 信号已过期 → 推送过期卡片并提前返回
+        if signal.is_expired():
+            await self._card_handler.push_signal_expired(signal)
+            return {"success": False, "message": "信号已过期", "risk_blocked": True}
 
         # 执行
         result = self._execution_engine.execute(signal)

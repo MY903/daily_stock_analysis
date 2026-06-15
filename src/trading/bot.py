@@ -3,12 +3,21 @@
 整合所有模块，管理交易机器人生命周期。
 """
 
+import warnings
+
 import logging
 import signal
 import sys
 import time
 import threading
 from typing import Dict, Any, Optional
+
+warnings.warn(
+    "DEPRECATED: TradingBot will be removed in a future version. "
+    "Use QuantWeaselPipeline (src/trading/pipeline.py) instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from src.trading.config import AppConfig, load_config
 from src.trading.tiger_client import TigerClient

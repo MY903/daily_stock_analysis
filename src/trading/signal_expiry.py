@@ -65,6 +65,7 @@ class ExpiryManager:
     def start(self):
         """启动过期检查后台任务"""
         self._running = True
+        asyncio.create_task(self._expiry_loop())
         logger.info("信号过期检查已启动 (间隔: %ds)", self._check_interval)
 
     def stop(self):

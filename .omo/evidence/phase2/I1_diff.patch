@@ -1,0 +1,177 @@
+diff --git a/src/trading/bot.py b/src/trading/bot.py
+index 3f378bb0..f1a909df 100644
+--- a/src/trading/bot.py
++++ b/src/trading/bot.py
+@@ -3,6 +3,8 @@
+ 整合所有模块，管理交易机器人生命周期。
+ """
+ 
++import warnings
++
+ import logging
+ import signal
+ import sys
+@@ -10,6 +12,13 @@ import time
+ import threading
+ from typing import Dict, Any, Optional
+ 
++warnings.warn(
++    "DEPRECATED: TradingBot will be removed in a future version. "
++    "Use QuantWeaselPipeline (src/trading/pipeline.py) instead.",
++    DeprecationWarning,
++    stacklevel=2,
++)
++
+ from src.trading.config import AppConfig, load_config
+ from src.trading.tiger_client import TigerClient
+ from src.trading.state_machine import StateMachine, TradingState
+diff --git a/src/trading/card_handler.py b/src/trading/card_handler.py
+index 6f66c17b..cbc16a51 100644
+--- a/src/trading/card_handler.py
++++ b/src/trading/card_handler.py
+@@ -5,7 +5,7 @@
+ """
+ 
+ import logging
+-from typing import Any, Optional, Callable
++from typing import Any, Optional, Callable, Awaitable
+ from datetime import datetime
+ 
+ from src.trading.signal import Signal, SignalStatus, ConfirmResult, ConfirmAction
+@@ -99,8 +99,8 @@ class SignalConfirmHandler:
+                 logger.info("已发送拒绝卡片: signal=%s chat=%s", signal_id, chat_id)
+         return result
+ 
+-    def on_execution(self, handler: Callable[[Signal], None]):
+-        """注册执行回调（确认后触发）"""
++    def on_execution(self, handler: Callable[[Signal], Awaitable[None]]):
++        """注册执行回调（确认后触发），支持异步处理器"""
+         self._execution_handler = handler
+ 
+     async def push_signal_card(self, signal: Signal, chat_id: str = "") -> bool:
+@@ -186,7 +186,7 @@ class SignalConfirmHandler:
+                 signal.quantity = modified_quantity
+             signal.status = SignalStatus.CONFIRMED
+             if self._execution_handler:
+-                self._execution_handler(signal)
++                await self._execution_handler(signal)
+                 logger.info("信号确认，触发执行: %s", signal_id)
+             else:
+                 logger.warning("信号已确认但未注册执行处理器: %s", signal_id)
+diff --git a/src/trading/pipeline.py b/src/trading/pipeline.py
+index e4d8ab18..b2f18e3d 100644
+--- a/src/trading/pipeline.py
++++ b/src/trading/pipeline.py
+@@ -47,6 +47,10 @@ class QuantWeaselPipeline:
+         self._card_handler = SignalConfirmHandler(
+             self._bot, self._audit_logger, reply_client=reply_client,
+         )
++        # Wire L3 card confirm callback → process_confirmed_signal (end-to-end)
++        self._card_handler.on_execution(
++            lambda signal: self.process_confirmed_signal(signal.signal_id)
++        )
+         self._execution_engine = ExecutionEngine(
+             self._tiger_client, self._risk_manager, self._audit_logger
+         )
+@@ -107,6 +111,11 @@ class QuantWeaselPipeline:
+         # 重建 Signal 对象
+         signal = Signal.model_validate_json(history["signal_json"])
+ 
++        # 信号已过期 → 推送过期卡片并提前返回
++        if signal.is_expired():
++            await self._card_handler.push_signal_expired(signal)
++            return {"success": False, "message": "信号已过期", "risk_blocked": True}
++
+         # 执行
+         result = self._execution_engine.execute(signal)
+ 
+diff --git a/src/trading/signal_expiry.py b/src/trading/signal_expiry.py
+index 6301d39d..0f5dbe30 100644
+--- a/src/trading/signal_expiry.py
++++ b/src/trading/signal_expiry.py
+@@ -65,6 +65,7 @@ class ExpiryManager:
+     def start(self):
+         """启动过期检查后台任务"""
+         self._running = True
++        asyncio.create_task(self._expiry_loop())
+         logger.info("信号过期检查已启动 (间隔: %ds)", self._check_interval)
+ 
+     def stop(self):
+diff --git a/src/trading/signal_scheduler.py b/src/trading/signal_scheduler.py
+index 41619817..e94a2391 100644
+--- a/src/trading/signal_scheduler.py
++++ b/src/trading/signal_scheduler.py
+@@ -71,6 +71,37 @@ class TradingCalendar:
+         market_open = dt.replace(hour=13, minute=30, second=0)  # 9:30 ET = 13:30 UTC
+         return pre_open <= dt < market_open
+ 
++    @classmethod
++    def from_symbol(cls, symbol: str):
++        """根据股票代码返回对应的交易日历"""
++        if HKCalendar.is_hk_symbol(symbol):
++            return HKCalendar()
++        return cls()
++
++
++class HKCalendar:
++    """HK 股票交易日历占位"""
++
++    @staticmethod
++    def is_hk_symbol(symbol: str) -> bool:
++        """判断是否为港股代码（以 .HK 结尾）"""
++        return symbol.rstrip().upper().endswith(".HK")
++
++    @staticmethod
++    def is_market_hours(dt: Optional[datetime] = None) -> bool:
++        """判断是否在交易时间内（占位：始终返回 False）"""
++        return False
++
++    @staticmethod
++    def is_trading_day(dt: Optional[datetime] = None) -> bool:
++        """判断是否为交易日（占位：始终返回 False）"""
++        return False
++
++    @staticmethod
++    def next_trading_day(dt: Optional[datetime] = None) -> datetime:
++        """返回下一个交易日（占位：抛出 NotImplementedError）"""
++        raise NotImplementedError("HKCalendar stub")
++
+ 
+ class PreMarketScheduler:
+     """盘前批量信号调度器"""
+diff --git a/trading_main.py b/trading_main.py
+index 7a6bf9a4..5820108f 100644
+--- a/trading_main.py
++++ b/trading_main.py
+@@ -8,12 +8,21 @@
+     python trading_main.py --status           # 查看当前状态
+ """
+ 
++import warnings
++
+ import argparse
+ import json
+ import logging
+ import sys
+ from pathlib import Path
+ 
++warnings.warn(
++    "DEPRECATED: TradingBot will be removed in a future version. "
++    "Use QuantWeaselPipeline (src/trading/pipeline.py) instead.",
++    DeprecationWarning,
++    stacklevel=2,
++)
++
+ # 确保项目根目录在 sys.path 中
+ project_root = Path(__file__).resolve().parent
+ if str(project_root) not in sys.path:
+@@ -152,4 +161,9 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    import sys
++    print(
++        "DEPRECATED: TradingBot is deprecated. Use QuantWeaselPipeline (src/trading/pipeline.py) instead.",
++        file=sys.stderr,
++    )
+     main()

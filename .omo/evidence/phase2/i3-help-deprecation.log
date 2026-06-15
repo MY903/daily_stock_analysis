@@ -1,0 +1,15 @@
+/home/dministrator/workspaces/stock_analysis/daily_stock_analysis/trading_main.py:32: DeprecationWarning: DEPRECATED: TradingBot will be removed in a future version. Use QuantWeaselPipeline (src/trading/pipeline.py) instead.
+  from src.trading.bot import TradingBot
+[DingTalk Stream] dingtalk-stream SDK 未安装，Stream 模式不可用
+[DingTalk Stream] 请运行: pip install dingtalk-stream
+DEPRECATED: TradingBot is deprecated. Use QuantWeaselPipeline (src/trading/pipeline.py) instead.
+usage: trading_main.py [-h] [--config CONFIG] [--dry-run] [--status]
+
+TQQQ 自动交易机器人
+
+options:
+  -h, --help            show this help message and exit
+  --config CONFIG, -c CONFIG
+                        配置文件路径 (默认: config/trading.yaml)
+  --dry-run             试运行模式：验证配置和 API 连接
+  --status              查看当前交易状态

@@ -1,0 +1,12 @@
+[DingTalk Stream] dingtalk-stream SDK 未安装，Stream 模式不可用
+[DingTalk Stream] 请运行: pip install dingtalk-stream
+双重确认拦截: test-123
+PASS: Pipeline instantiation + on_execution wired
+PASS: Dedup/nonexistent guard - 信号 nonexistent-id 不存在
+PASS: Expired signal detection works
+PASS: Success flow - order_id=mock-order-1
+PASS: Risk intercept - 风控拦截: 仓位超限
+PASS: Expired signal -> expired card - 信号已过期
+PASS: DedupGuard prevents double execution - 信号已被确认（防重复执行）
+
+=== 7/7 TESTS PASSED ===

@@ -1,0 +1,25 @@
+<string>:1: DeprecationWarning: DEPRECATED: TradingBot will be removed in a future version. Use QuantWeaselPipeline (src/trading/pipeline.py) instead.
+[DingTalk Stream] dingtalk-stream SDK 未安装，Stream 模式不可用
+[DingTalk Stream] 请运行: pip install dingtalk-stream
+/home/dministrator/.local/lib/python3.12/site-packages/lark_oapi/ws/pb/google/__init__.py:2: DeprecationWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html
+  __import__('pkg_resources').declare_namespace(__name__)
+/usr/lib/python3/dist-packages/pkg_resources/__init__.py:2871: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('zope')`.
+Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+  declare_namespace(pkg)
+/home/dministrator/.local/lib/python3.12/site-packages/lark_oapi/ws/pb/google/__init__.py:2: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('lark_oapi.ws.pb.google')`.
+Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+  __import__('pkg_resources').declare_namespace(__name__)
+/usr/lib/python3/dist-packages/pkg_resources/__init__.py:2350: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('lark_oapi.ws.pb')`.
+Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+  declare_namespace(parent)
+/usr/lib/python3/dist-packages/pkg_resources/__init__.py:2350: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('lark_oapi.ws')`.
+Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+  declare_namespace(parent)
+/usr/lib/python3/dist-packages/pkg_resources/__init__.py:2350: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('lark_oapi')`.
+Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+  declare_namespace(parent)
+/home/dministrator/.local/lib/python3.12/site-packages/lark_oapi/ws/pb/google/protobuf/internal/well_known_types.py:91: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  _EPOCH_DATETIME_NAIVE = datetime.datetime.utcfromtimestamp(0)
+/home/dministrator/.local/lib/python3.12/site-packages/lark_oapi/ws/client.py:31: DeprecationWarning: There is no current event loop
+  loop = asyncio.get_event_loop()
+OK

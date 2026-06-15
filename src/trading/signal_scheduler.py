@@ -71,6 +71,37 @@ class TradingCalendar:
         market_open = dt.replace(hour=13, minute=30, second=0)  # 9:30 ET = 13:30 UTC
         return pre_open <= dt < market_open
 
+    @classmethod
+    def from_symbol(cls, symbol: str):
+        """根据股票代码返回对应的交易日历"""
+        if HKCalendar.is_hk_symbol(symbol):
+            return HKCalendar()
+        return cls()
+
+
+class HKCalendar:
+    """HK 股票交易日历占位"""
+
+    @staticmethod
+    def is_hk_symbol(symbol: str) -> bool:
+        """判断是否为港股代码（以 .HK 结尾）"""
+        return symbol.rstrip().upper().endswith(".HK")
+
+    @staticmethod
+    def is_market_hours(dt: Optional[datetime] = None) -> bool:
+        """判断是否在交易时间内（占位：始终返回 False）"""
+        return False
+
+    @staticmethod
+    def is_trading_day(dt: Optional[datetime] = None) -> bool:
+        """判断是否为交易日（占位：始终返回 False）"""
+        return False
+
+    @staticmethod
+    def next_trading_day(dt: Optional[datetime] = None) -> datetime:
+        """返回下一个交易日（占位：抛出 NotImplementedError）"""
+        raise NotImplementedError("HKCalendar stub")
+
 
 class PreMarketScheduler:
     """盘前批量信号调度器"""
