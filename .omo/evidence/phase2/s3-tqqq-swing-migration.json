@@ -1,0 +1,32 @@
+{
+  "step": "S3: Migrate TQQQSwingStrategy to use SignalAdapter + StrategyRegistry + QuantWeaselPipeline",
+  "timestamp": "2026-06-15T00:00:00Z",
+  "files_changed": [
+    "src/trading/strategy/tqqq_swing.py",
+    "src/trading/strategy/tqqq_swing_pipeline.py",
+    "src/trading/strategy/__init__.py"
+  ],
+  "checks": {
+    "registry_has_tqqq_swing": true,
+    "registry_get_returns_correct_class": true,
+    "registry_list_strategies": ["TQQQ-Swing"],
+    "strategy_name": "TQQQ-Swing",
+    "strategy_symbol": "TQQQ",
+    "evaluate_returns_signal": true,
+    "evaluate_signal_action": "buy",
+    "legacy_to_new_works": true,
+    "new_signal_symbol": "TQQQ",
+    "new_signal_action": "BUY",
+    "runner_has_run_once": true,
+    "run_once_is_async": true,
+    "config_reads_yaml_entry": true,
+    "config_reads_yaml_tp": true,
+    "config_reads_yaml_sl": true
+  },
+  "lsp_diagnostics": {
+    "tqqq_swing.py": "clean",
+    "tqqq_swing_pipeline.py": "clean",
+    "__init__.py": "clean"
+  },
+  "compile_check": "all passed"
+}

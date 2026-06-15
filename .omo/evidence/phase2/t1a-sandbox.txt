@@ -1,0 +1,45 @@
+T1a Unify env config — SANDBOX mode evidence
+============================================
+
+Date: 2026-06-15
+
+Verification: settings with TIGER_ENV=SANDBOX (default)
+
+1. TRADING_MODE enum loaded:
+   - config/settings.py: TradingMode.SANDBOX = "SANDBOX"
+   - config/settings.py: TradingMode.PAPER = "PAPER"
+   - config/settings.py: TradingMode.PROD = "PROD"
+
+2. Derived properties with TIGER_ENV=SANDBOX:
+   - settings.TRADING_MODE = TradingMode.SANDBOX
+   - settings.is_sandbox = True    (SANDBOX only)
+   - settings.is_paper  = False
+   - settings.is_prod   = False
+   - settings.QUANT_DRY_RUN = True  (default, aligned with SANDBOX)
+   - settings.TRADING_AUTO_TRADE = False  (default, aligned with SANDBOX)
+
+3. TigerConfig.environment derives from settings.TIGER_ENV:
+   - config.environment = "PAPER"  (SANDBOX maps to PAPER, not LIVE)
+   - config.is_live = False
+
+4. Execution engine behavior:
+   - settings.is_prod is False → Phase 1 safety lock PASSES
+   - settings.QUANT_DRY_RUN is True → dry-run execution path
+
+5. Files modified:
+   - config/settings.py: Added TradingMode enum, TRADING_MODE property,
+     is_paper, is_prod; refined is_sandbox to SANDBOX-only semantics
+   - src/trading/config.py: TigerConfig.environment now derives from
+     settings.TIGER_ENV; removed TRADING_TIGER_ENV from env_map
+   - src/trading/execution.py: Phase 1 safety check uses settings.is_prod
+
+6. Backward compat verified:
+   - settings.QUANT_DRY_RUN still exists and works
+   - settings.TRADING_AUTO_TRADE still exists and works
+   - settings.TIGER_ENV still exists and works
+   - TigerConfig.environment still accessible as property
+   - TigerConfig.is_live still works
+   - bot.py references to .environment unchanged (property access same)
+   - tiger_client.py references to .is_live unchanged
+
+7. Compilation: python -m py_compile passed on all 3 modified files

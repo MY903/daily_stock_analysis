@@ -101,6 +101,61 @@ class LarkCardBuilder:
         }
 
     @staticmethod
+    def confirmed_card(signal_id: str, symbol: str, action: str,
+                      price: float, quantity: int) -> dict:
+        """
+        Build a post-confirm card with buttons replaced by '已确认' text.
+
+        This card is used to update the original signal confirm card in-place,
+        disabling further button interactions (anti-double-click).
+        """
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"✅ 信号已确认 - {symbol}"},
+                "template": "green"
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": f"**标的**: {symbol}\n**方向**: {action}\n**价格**: ${price:.2f}\n**数量**: {quantity}股\n**信号ID**: `{signal_id}`"}
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": "✅ **交易已确认，即将执行**"}
+                }
+            ]
+        }
+
+    @staticmethod
+    def rejected_card(signal_id: str, symbol: str, action: str,
+                      price: float, quantity: int) -> dict:
+        """
+        Build a post-reject card showing '已拒绝'.
+
+        This card is sent as a new message (not an update) after rejection.
+        """
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"❌ 信号已拒绝 - {symbol}"},
+                "template": "red"
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": f"**标的**: {symbol}\n**方向**: {action}\n**价格**: ${price:.2f}\n**数量**: {quantity}股\n**信号ID**: `{signal_id}`"}
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": "❌ **交易已拒绝，不会执行**"}
+                }
+            ]
+        }
+
+    @staticmethod
     def signal_expired_card(signal_id: str, symbol: str) -> dict:
         """信号过期卡片"""
         return {
@@ -123,10 +178,12 @@ class FeishuCardActionHandler:
     飞书卡片回调事件处理器 (POC)
 
     处理来自飞书的 P2CardActionTriggerV1 事件（用户点击卡片按钮后的回调），
-    解析 action（confirm/reject）和 signal_id，记录日志并回复确认消息。
+    解析 action（confirm/reject）和 signal_id，记录日志并调用已注册的确认/拒绝回调。
 
     使用方式：
         handler = FeishuCardActionHandler(reply_client)
+        handler.set_confirm_handler(my_on_confirm)
+        handler.set_reject_handler(my_on_reject)
         event_handler_builder = handler.register_card_handler(event_handler_builder)
     """
 
@@ -136,6 +193,26 @@ class FeishuCardActionHandler:
             reply_client: FeishuReplyClient 实例，用于发送回复消息
         """
         self._reply_client = reply_client
+        self._confirm_handler: Optional[Callable] = None
+        self._reject_handler: Optional[Callable] = None
+
+    def set_confirm_handler(self, handler: Callable):
+        """
+        Register the confirm callback.
+
+        The handler should accept (signal_id: str, **kwargs) where kwargs
+        may include message_id, chat_id for card updates.
+        """
+        self._confirm_handler = handler
+
+    def set_reject_handler(self, handler: Callable):
+        """
+        Register the reject callback.
+
+        The handler should accept (signal_id: str, **kwargs) where kwargs
+        may include message_id, chat_id for card updates.
+        """
+        self._reject_handler = handler
 
     def register_card_handler(self, event_handler_builder) -> object:
         """
@@ -159,7 +236,7 @@ class FeishuCardActionHandler:
         处理卡片按钮回调事件（P2CardActionTriggerV1）。
 
         解析用户点击的按钮 value 中的 action（confirm/reject）和 signal_id，
-        记录日志，并通过 FeishuReplyClient 发送"已收到"回复。
+        提取 message_id 和 chat_id，调用已注册的确认/拒绝回调处理器。
 
         Args:
             event: P2CardActionTrigger 事件对象
@@ -190,30 +267,38 @@ class FeishuCardActionHandler:
             action = value.get('action', 'unknown')
             signal_id = value.get('signal_id', 'unknown')
 
-            # 获取发送回复所需的 chat_id
+            # 获取卡片消息上下文：chat_id + message_id
             chat_id = None
+            message_id = None
             if context_obj is not None:
                 chat_id = getattr(context_obj, 'open_chat_id', None)
+                message_id = getattr(context_obj, 'open_message_id', None)
 
             # 记录日志
             action_label = "confirm" if action == "confirm" else "reject" if action == "reject" else action
             logger.info(
-                "[LarkCard] Received card action: %s for signal %s",
+                "[LarkCard] Received card action: %s for signal %s (msg=%s, chat=%s)",
                 action_label,
                 signal_id,
+                message_id,
+                chat_id,
             )
 
-            # 通过 FeishuReplyClient 发送回复消息
-            if self._reply_client and chat_id:
-                reply_text = "已收到确认" if action == "confirm" else "已收到拒绝"
-                self._reply_client.send_to_chat(chat_id, reply_text)
-                logger.debug(
-                    "[FeishuCardAction] 已向 chat=%s 发送回复: %s", chat_id, reply_text
+            # 调用已注册的回调处理器
+            if action == "confirm" and self._confirm_handler:
+                logger.debug("[FeishuCardAction] 调用确认回调: signal=%s", signal_id)
+                self._confirm_handler(
+                    signal_id,
+                    message_id=message_id,
+                    chat_id=chat_id,
                 )
-            elif not chat_id:
-                logger.debug("[FeishuCardAction] 无法获取 chat_id，跳过回复")
-            else:
-                logger.debug("[FeishuCardAction] 未配置 reply_client，跳过回复")
+            elif action == "reject" and self._reject_handler:
+                logger.debug("[FeishuCardAction] 调用拒绝回调: signal=%s", signal_id)
+                self._reject_handler(
+                    signal_id,
+                    message_id=message_id,
+                    chat_id=chat_id,
+                )
 
             # 返回成功响应（含 Toast）
             toast_text = "处理成功" if action in ("confirm", "reject") else f"未知操作: {action}"
@@ -229,11 +314,13 @@ class FeishuCardActionHandler:
 
 
 class LarkInteractiveBot:
-    """飞书互动卡片 Bot（Stream 模式骨架）"""
+    """飞书互动卡片 Bot（Stream 模式）"""
 
     def __init__(self, app_id: str = "", app_secret: str = ""):
-        self._app_id = app_id
-        self._app_secret = app_secret
+        from config.settings import settings
+        self._app_id = app_id or settings.LARK_APP_ID
+        self._app_secret = app_secret or settings.LARK_APP_SECRET
+        self._default_chat_id = settings.LARK_DEFAULT_CHAT_ID
         self._running = False
         self._confirm_handler: Optional[Callable] = None
         self._reject_handler: Optional[Callable] = None
@@ -249,13 +336,62 @@ class LarkInteractiveBot:
     async def push_card(self, card: dict, chat_id: str = "") -> bool:
         """
         推送互动卡片到飞书。
-        当前为骨架实现，返回 True 表示模拟成功。
 
-        TODO: 使用 lark-oapi SDK 实现真实推送
+        使用 FeishuReplyClient 的 send_card 方法发送卡片 JSON。
+        如果 FeishuStreamClient 不可用，降级为日志记录。
         """
-        logger.info(f"[LarkBot] Push card to {chat_id or 'default chat'}: "
-                    f"{card.get('header', {}).get('title', {}).get('content', 'No title')}")
-        return True
+        target_chat_id = chat_id or self._default_chat_id
+
+        if not target_chat_id:
+            logger.warning("[LarkBot] 未指定 chat_id 且未配置 LARK_DEFAULT_CHAT_ID")
+            return False
+
+        try:
+            from bot.platforms.feishu_stream import get_feishu_stream_client, \
+                FeishuReplyClient
+
+            # 获取 FeishuReplyClient 实例
+            stream_client = get_feishu_stream_client()
+            if stream_client is not None and stream_client._reply_client is not None:
+                reply_client = stream_client._reply_client
+            else:
+                # Stream 客户端未启动时直接创建 FeishuReplyClient
+                try:
+                    reply_client = FeishuReplyClient(
+                        self._app_id, self._app_secret
+                    )
+                except (ImportError, ValueError) as e:
+                    logger.warning(
+                        "[LarkBot] 无法创建 FeishuReplyClient: %s，"
+                        "降级为日志模式", e
+                    )
+                    logger.info(
+                        "[LarkBot] (降级) 卡片标题: %s",
+                        card.get("header", {}).get("title", {}).get(
+                            "content", "无标题"
+                        ),
+                    )
+                    return True
+
+            result = reply_client.send_card(card, target_chat_id)
+            if result:
+                logger.info(
+                    "[LarkBot] 卡片已推送到 %s: %s",
+                    target_chat_id,
+                    card.get("header", {}).get("title", {}).get(
+                        "content", "无标题"
+                    ),
+                )
+            else:
+                logger.error(
+                    "[LarkBot] 推送卡片到 %s 失败", target_chat_id
+                )
+            return result
+
+        except Exception as e:
+            logger.error("[LarkBot] 推送卡片异常: %s", e)
+            logger.exception(e)
+            return False
 
     def start(self):
         """启动 Bot（骨架）"""

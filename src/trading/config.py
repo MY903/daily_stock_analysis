@@ -71,6 +71,13 @@ class StopLossConfig:
 
 
 @dataclass
+class MACrossoverConfig:
+    """MA 交叉策略配置"""
+    fast_period: int = 5
+    slow_period: int = 20
+
+
+@dataclass
 class TradingConfig:
     """交易策略配置"""
     symbol: str = "TQQQ"
@@ -80,6 +87,7 @@ class TradingConfig:
     entry: EntryConfig = field(default_factory=EntryConfig)
     take_profit: TakeProfitConfig = field(default_factory=TakeProfitConfig)
     stop_loss: StopLossConfig = field(default_factory=StopLossConfig)
+    ma: MACrossoverConfig = field(default_factory=MACrossoverConfig)
 
 
 @dataclass
@@ -207,15 +215,17 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     entry_raw = trading_raw.pop("entry", {}) if isinstance(trading_raw, dict) else {}
     tp_raw = trading_raw.pop("take_profit", {}) if isinstance(trading_raw, dict) else {}
     sl_raw = trading_raw.pop("stop_loss", {}) if isinstance(trading_raw, dict) else {}
+    ma_raw = trading_raw.pop("ma", {}) if isinstance(trading_raw, dict) else {}
 
     config = AppConfig(
-        tiger=TigerConfig(**{k: v for k, v in tiger_raw.items() if k in TigerConfig.__dataclass_fields__}),
-        trading=TradingConfig(
-            **{k: v for k, v in trading_raw.items() if k in TradingConfig.__dataclass_fields__},
-            entry=EntryConfig(**{k: v for k, v in entry_raw.items() if k in EntryConfig.__dataclass_fields__}),
-            take_profit=TakeProfitConfig(**{k: v for k, v in tp_raw.items() if k in TakeProfitConfig.__dataclass_fields__}),
-            stop_loss=StopLossConfig(**{k: v for k, v in sl_raw.items() if k in StopLossConfig.__dataclass_fields__}),
-        ),
+            tiger=TigerConfig(**{k: v for k, v in tiger_raw.items() if k in TigerConfig.__dataclass_fields__}),
+            trading=TradingConfig(
+                **{k: v for k, v in trading_raw.items() if k in TradingConfig.__dataclass_fields__},
+                entry=EntryConfig(**{k: v for k, v in entry_raw.items() if k in EntryConfig.__dataclass_fields__}),
+                take_profit=TakeProfitConfig(**{k: v for k, v in tp_raw.items() if k in TakeProfitConfig.__dataclass_fields__}),
+                stop_loss=StopLossConfig(**{k: v for k, v in sl_raw.items() if k in StopLossConfig.__dataclass_fields__}),
+                ma=MACrossoverConfig(**{k: v for k, v in ma_raw.items() if k in MACrossoverConfig.__dataclass_fields__}),
+            ),
         bot=BotConfig(**{k: v for k, v in bot_raw.items() if k in BotConfig.__dataclass_fields__}),
         notification=NotificationConfig(**{k: v for k, v in notification_raw.items() if k in NotificationConfig.__dataclass_fields__}),
         logging=LoggingConfig(**{k: v for k, v in logging_raw.items() if k in LoggingConfig.__dataclass_fields__}),

@@ -1,0 +1,72 @@
+===== SCENARIO 1a: Signal Creation =====
+Signal ID: ea616bd4-a3c4-4822-bdeb-725b93276315, Status: PENDING
+测试 1a 通过
+
+===== SCENARIO 1b: CLI Parsing =====
+[DingTalk Stream] dingtalk-stream SDK 未安装，Stream 模式不可用
+[DingTalk Stream] 请运行: pip install dingtalk-stream
+盘前模式: OK
+manual 模式: OK
+所有 CLI 解析测试通过
+
+===== SCENARIO 2: Pipeline Lifecycle =====
+[DingTalk Stream] dingtalk-stream SDK 未安装，Stream 模式不可用
+[DingTalk Stream] 请运行: pip install dingtalk-stream
+Pipeline created: True
+初始状态: stopped
+启动后: running
+停止后: stopped
+生命周期测试全部通过
+
+===== SCENARIO 3: Signal Generation & Push =====
+[DingTalk Stream] dingtalk-stream SDK 未安装，Stream 模式不可用
+[DingTalk Stream] 请运行: pip install dingtalk-stream
+信号已生成: 1c550989-0275-44fc-bca0-044a3510d963
+执行结果: {'success': True, 'order_id': 'dry-run-order-000', 'message': '[DRY-RUN] 模拟执行成功', 'risk_blocked': False}
+端到端流程测试通过
+
+===== SCENARIO 4: Duplicate Guard =====
+[DingTalk Stream] dingtalk-stream SDK 未安装，Stream 模式不可用
+[DingTalk Stream] 请运行: pip install dingtalk-stream
+双重确认拦截: de6980c6-59fb-488d-bbeb-207c7a32fb2d
+第一次确认: {'success': True, 'order_id': 'dry-run-order-000', 'message': '[DRY-RUN] 模拟执行成功', 'risk_blocked': False}
+第二次确认: {'success': False, 'message': '信号已被确认（防重复执行）'}
+防重复机制: OK
+重复确认防护测试通过
+
+===== SCENARIO 5: Market-wide Modes =====
+[DingTalk Stream] dingtalk-stream SDK 未安装，Stream 模式不可用
+[DingTalk Stream] 请运行: pip install dingtalk-stream
+盘前模式: 生成 0 条信号
+盘中模式: 生成 0 条信号
+大盘模式测试通过
+
+===== SCENARIO 6a: --help =====
+usage: quant_weasel_main.py [-h] [--dry-run]
+                            [--mode {premarket,intraday,manual,daemon}]
+                            [--symbol SYMBOL] [--action {BUY,SELL,HOLD}]
+                            [--quantity QUANTITY] [--confidence CONFIDENCE]
+                            [--rationale RATIONALE]
+
+QuantWeasel - AI 量化交易系统
+
+options:
+  -h, --help            show this help message and exit
+  --dry-run             Dry-run 模式（不下真实订单）
+  --mode {premarket,intraday,manual,daemon}
+                        运行模式
+  --symbol SYMBOL       交易标的
+  --action {BUY,SELL,HOLD}
+                        交易方向
+  --quantity QUANTITY   数量
+  --confidence CONFIDENCE
+                        置信度 0-1
+  --rationale RATIONALE
+                        交易理据
+
+===== SCENARIO 6b: premarket --dry-run =====
+2026-06-15 17:05:31,769 [INFO] src.trading.config: 加载交易配置: /home/dministrator/workspaces/stock_analysis/daily_stock_analysis/config/trading.yaml
+2026-06-15 17:05:31,771 [INFO] src.trading.config: 加载交易配置: /home/dministrator/workspaces/stock_analysis/daily_stock_analysis/config/trading.yaml
+2026-06-15 17:05:31,773 [INFO] src.trading.signal_scheduler: 盘前调度: 生成 0 条信号
+2026-06-15 17:05:31,773 [INFO] src.trading.pipeline: 盘前模式完成: 生成 0 条信号
+盘前模式完成: 生成 0 条信号

@@ -17,10 +17,12 @@ from typing import Optional, Dict, Any
 from src.trading.config import AppConfig
 from src.trading.state_machine import TradingState
 from src.trading.strategy.base import BaseStrategy, Signal, MarketData, PositionInfo
+from src.trading.strategy.registry import StrategyRegistry
 
 logger = logging.getLogger(__name__)
 
 
+@StrategyRegistry.register
 class TQQQSwingStrategy(BaseStrategy):
     """TQQQ 摆动交易策略
 

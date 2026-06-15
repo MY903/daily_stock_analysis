@@ -1,7 +1,8 @@
 from enum import Enum
 from dataclasses import dataclass
 import logging
-from datetime import datetime
+from datetime import datetime, date
+from typing import Optional
 
 from config.settings import settings
 from src.trading.signal import Signal
@@ -55,10 +56,49 @@ class RiskManager:
         if restored > 0:
             self._daily_loss_pct = restored
             logger.info(f"从 SQLite 恢复今日累计亏损: {restored:.2f}%")
+        # 交易日跟踪（用于自动重置）
+        self._current_trading_date: Optional[str] = None
 
     def update_total_equity(self, equity: float):
         """更新总资产（用于仓位计算）"""
         self._total_equity = equity
+
+    def sync_equity(self, tiger_client, trading_date: Optional[str] = None) -> None:
+        """从 Tiger Client 同步实际资产并检测交易日变更。
+
+        1. 调用 TigerClient.get_account_summary() 获取 net_value
+        2. 调用 update_total_equity() 更新总资产
+        3. 检测交易日是否变更，自动重置每日统计
+
+        Args:
+            tiger_client: TigerClient 实例（需已连接）
+            trading_date: 可选，指定当前交易日日期字符串 (YYYY-MM-DD)
+        """
+        today = trading_date or date.today().isoformat()
+
+        # 检测交易日变更 → 自动重置
+        if self._current_trading_date and self._current_trading_date != today:
+            logger.info(
+                "交易日变更: %s -> %s，自动重置每日统计",
+                self._current_trading_date, today,
+            )
+            self.reset_daily()
+        self._current_trading_date = today
+
+        # 从 Tiger SDK 同步资产
+        summary = tiger_client.get_account_summary()
+        net_value = summary.get("net_value")
+        if net_value is not None and net_value > 0:
+            self.update_total_equity(float(net_value))
+            logger.info(
+                "总资产已同步: $%.2f (cash=%.2f, buying_power=%.2f)",
+                net_value, summary.get("cash", 0), summary.get("buying_power", 0),
+            )
+        else:
+            logger.warning(
+                "获取账户摘要失败或净值为 0，保留当前总资产: $%.2f",
+                self._total_equity,
+            )
 
     def update_position(self, symbol: str, quantity: int, avg_price: float):
         """更新持仓信息"""

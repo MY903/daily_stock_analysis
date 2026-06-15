@@ -1,0 +1,25 @@
+T1a Unify env config — PROD mode evidence
+===========================================
+
+Date: 2026-06-15
+
+Verification: settings with TIGER_ENV=PROD (simulated via property check)
+
+1. Derived properties with TIGER_ENV=PROD:
+   - settings.TRADING_MODE = TradingMode.PROD
+   - settings.is_sandbox = False  (SANDBOX only)
+   - settings.is_paper  = False
+   - settings.is_prod   = True
+
+2. TigerConfig.environment derivation:
+   - config.environment = "LIVE"  (PROD maps to LIVE)
+   - config.is_live = True
+
+3. Execution engine behavior (PROD mode):
+   - settings.is_prod is True → Phase 1 safety lock BLOCKS execution
+   - Returns: {"success": False, "message": "Phase 1 强制模拟盘模式，禁止实盘交易"}
+
+4. Backward compat:
+   - No .env values were modified
+   - No env vars were deleted
+   - Existing code paths (bot.py, tiger_client.py) unchanged

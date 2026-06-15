@@ -85,6 +85,10 @@ class Settings(BaseSettings):
         default="",
         description="飞书应用 App Secret",
     )
+    LARK_DEFAULT_CHAT_ID: str = Field(
+        default="",
+        description="飞书 Stream Bot 默认推送会话 ID（未指定 chat_id 时使用）",
+    )
 
     # ============================================================
     # 风控参数

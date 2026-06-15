@@ -42,6 +42,8 @@ try:
         ReplyMessageRequestBody,
         CreateMessageRequest,
         CreateMessageRequestBody,
+        UpdateMessageRequest,
+        UpdateMessageRequestBody,
     )
 
     FEISHU_SDK_AVAILABLE = True
@@ -159,6 +161,93 @@ class FeishuReplyClient:
 
         except Exception as e:
             logger.error(f"[Feishu Stream] 发送交互卡片异常: {e}")
+            return False
+
+    def send_card(self, card: dict, chat_id: str) -> bool:
+        """
+        Send a pre-built interactive card to a chat.
+
+        Unlike _send_interactive_card which builds a card from markdown text,
+        this method accepts a fully-constructed card dict (e.g. from LarkCardBuilder).
+
+        Args:
+            card: Fully-constructed card JSON dict
+            chat_id: Target chat ID
+
+        Returns:
+            Whether the send was successful
+        """
+        try:
+            content_json = json.dumps(card)
+
+            request = CreateMessageRequest.builder() \
+                .receive_id_type("chat_id") \
+                .request_body(
+                CreateMessageRequestBody.builder()
+                    .receive_id(chat_id)
+                    .content(content_json)
+                    .msg_type("interactive")
+                    .build()
+            ) \
+                .build()
+
+            response = self._client.im.v1.message.create(request)
+
+            if not response.success():
+                logger.error(
+                    f"[Feishu Stream] 发送卡片失败: code={response.code}, "
+                    f"msg={response.msg}, log_id={response.get_log_id()}"
+                )
+                return False
+
+            logger.debug("[Feishu Stream] 发送卡片成功")
+            return True
+
+        except Exception as e:
+            logger.error(f"[Feishu Stream] 发送卡片异常: {e}")
+            return False
+
+    def update_card(self, message_id: str, card: dict) -> bool:
+        """
+        Update an existing interactive card message in-place.
+
+        Uses PATCH /open-apis/im/v1/messages/:message_id to replace the card
+        content with a new card dict (e.g. disabling buttons after confirm).
+
+        Args:
+            message_id: The message ID of the card to update.
+            card: Fully-constructed card JSON dict (e.g. from LarkCardBuilder).
+
+        Returns:
+            Whether the update was successful.
+        """
+        try:
+            content_json = json.dumps(card)
+
+            request = UpdateMessageRequest.builder() \
+                .message_id(message_id) \
+                .request_body(
+                UpdateMessageRequestBody.builder()
+                    .msg_type("interactive")
+                    .content(content_json)
+                    .build()
+            ) \
+                .build()
+
+            response = self._client.im.v1.message.update(request)
+
+            if not response.success():
+                logger.error(
+                    f"[Feishu Stream] 更新卡片失败: code={response.code}, "
+                    f"msg={response.msg}, log_id={response.get_log_id()}"
+                )
+                return False
+
+            logger.debug("[Feishu Stream] 更新卡片成功: message_id=%s", message_id)
+            return True
+
+        except Exception as e:
+            logger.error(f"[Feishu Stream] 更新卡片异常: {e}")
             return False
 
     def reply_text(self, message_id: str, text: str, at_user: bool = False,
@@ -565,6 +654,7 @@ class FeishuStreamClient:
         self._ws_client: Optional[ws.Client] = None
         self._reply_client: Optional[FeishuReplyClient] = None
         self._message_handler: Optional[FeishuStreamHandler] = None
+        self._card_handler = None  # FeishuCardActionHandler; set in _create_event_handler()
         self._background_thread: Optional[threading.Thread] = None
         self._running = False
 
@@ -612,6 +702,7 @@ class FeishuStreamClient:
         # 注册卡片按钮回调事件处理器
         card_handler = FeishuCardActionHandler(reply_client=self._reply_client)
         card_handler.register_card_handler(event_handler_builder)
+        self._card_handler = card_handler
 
         event_handler = event_handler_builder.build()
 
@@ -681,6 +772,10 @@ class FeishuStreamClient:
         if self._message_handler is not None:
             self._message_handler.shutdown(wait=False)
         logger.info("[Feishu Stream] 客户端已停止")
+
+    def get_card_handler(self):
+        """Return the card action handler for external callback wiring."""
+        return self._card_handler
 
     @property
     def is_running(self) -> bool:

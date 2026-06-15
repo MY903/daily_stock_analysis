@@ -1,0 +1,17 @@
+L1 CardActionHandler POC — 2026-06-15
+Result: PASS (all 8 test cases)
+============================================================
+
+confirm toast: 处理成功
+reject toast: 处理成功
+registered: True
+
+Files changed:
+  bot/platforms/lark_interactive.py (+FeishuCardActionHandler class)
+  bot/platforms/feishu_stream.py (+P2CardActionTriggerV1 registration)
+
+Expected Outcome Checklist:
+  [x] lark_interactive.py gains FeishuCardActionHandler with register_card_handler()
+  [x] feishu_stream.py registers P2CardActionTriggerV1 in _create_event_handler()
+  [x] handle_card_action() parses action + signal_id, logs, returns toast
+  [x] Simulated callback logged: "Received card action: confirm for signal sig_qa_confirm_001"

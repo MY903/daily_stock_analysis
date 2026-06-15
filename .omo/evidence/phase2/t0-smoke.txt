@@ -1,0 +1,23 @@
+T0 Tiger Smoke Test — 2026-06-15
+Result: FAIL (expected graceful failure — token expired)
+===============================
+Command: python scripts/tiger_smoke.py
+Exit code: 1
+
+Output:
+  INFO  TIGER_TIGER_ID=2015****  TIGER_ENV=SANDBOX
+  INFO  Calling TigerClient.connect() ...
+  INFO  Tiger API 凭据从 .env 加载
+  INFO  Tiger API 连接模式: 模拟盘 (PAPER)
+  INFO  sdk version: 3.5.8
+  ERROR code=2400 msg=user token error(user token expired invalid)
+
+Interpretation:
+  - Script ✓ loads TIGER_* credentials from config.settings (.env)
+  - Script ✓ constructs AppConfig with PAPER environment
+  - TigerClient.connect() ✓ initializes SDK and reads creds
+  - TigerClient.connect() × returns code=2400 (token expired)
+  - Script handles failure gracefully: logs error, exits 1 ✓
+  - NO order placed, NO state mutation ✓
+
+Next: Refresh TIGER_TOKEN in .env via Tiger Brokers OpenAPI console.

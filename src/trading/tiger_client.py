@@ -291,6 +291,29 @@ class TigerClient:
             logger.error("查询资产失败: %s", e)
         return {}
 
+    def get_account_summary(self) -> Dict[str, Any]:
+        """获取账户摘要（净值和购买力）
+
+        Returns:
+            dict: 包含 net_value, cash, buying_power 的字典，
+                  失败时返回全 0 值。
+        """
+        self._ensure_connected()
+        try:
+            assets = self._trade_client.get_assets(segment=True)
+            if assets and isinstance(assets, list) and len(assets) > 0:
+                account = assets[0]
+                summary = getattr(account, '_summary', None)
+                if summary:
+                    return {
+                        "net_value": float(getattr(summary, 'net_liquidation', 0) or 0),
+                        "cash": float(getattr(summary, 'cash', 0) or 0),
+                        "buying_power": float(getattr(summary, 'buying_power', 0) or 0),
+                    }
+        except Exception as e:
+            logger.error("获取账户摘要失败: %s", e)
+        return {"net_value": 0.0, "cash": 0.0, "buying_power": 0.0}
+
     # ==================== 实时推送 ====================
 
     def start_push(self, symbol: str,
