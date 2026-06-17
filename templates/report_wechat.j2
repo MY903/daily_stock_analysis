@@ -1,6 +1,9 @@
 ## 🎯 {{ report_date }} {{ labels.dashboard_title }}
 
 > {{ results|length }} {{ labels.stock_unit }} | 🟢{{ labels.buy_label }}:{{ buy_count }} 🟡{{ labels.watch_label }}:{{ hold_count }} 🔴{{ labels.sell_label }}:{{ sell_count }}
+{% if market_status_line %}
+{{ market_status_line }}
+{% endif %}
 
 {% if summary_only %}
 **📊 {{ labels.summary_heading }}**
@@ -76,3 +79,6 @@
 {% endif %}
 
 *{{ labels.report_time_label }}: {{ report_timestamp[11:16] }}*
+{% if show_llm_model and models_used %}
+*{{ labels.analysis_model_label }}: {{ models_used|join(', ') }}*
+{% endif %}

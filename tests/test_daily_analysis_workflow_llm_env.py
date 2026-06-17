@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Static checks for LLM provider channel mappings in daily_analysis.yml."""
+"""Static checks for LLM provider channel mappings in 00-daily-analysis.yml."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import yaml
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 TEMPLATE_PATH = ROOT_DIR / "apps/dsa-web/src/components/settings/llmProviderTemplates.ts"
-WORKFLOW_PATH = ROOT_DIR / ".github/workflows/daily_analysis.yml"
+WORKFLOW_PATH = ROOT_DIR / ".github/workflows/00-daily-analysis.yml"
 ENV_EXAMPLE_PATH = ROOT_DIR / ".env.example"
 
 EXPECTED_TEMPLATE_CHANNELS = {
@@ -52,7 +52,7 @@ def _load_daily_analysis_env() -> dict[str, str]:
     analyze_step = next((step for step in steps if step.get("name") == "执行股票分析"), None)
     available_step_names = [step.get("name", "<unnamed>") for step in steps]
     assert analyze_step is not None, (
-        "Expected daily_analysis.yml job analyze to include a step named "
+        "Expected 00-daily-analysis.yml job analyze to include a step named "
         f"'执行股票分析'; available step names: {available_step_names}"
     )
     return analyze_step["env"]
@@ -92,6 +92,15 @@ def test_daily_analysis_keeps_channel_secrets_in_secrets_context() -> None:
             key = f"LLM_{upper}_{suffix}"
             assert f"vars.{key}" in env[key]
             assert f"secrets.{key}" in env[key]
+
+
+def test_daily_analysis_maps_usage_hmac_config_safely() -> None:
+    env = _load_daily_analysis_env()
+
+    assert env["LLM_USAGE_HMAC_SECRET"] == "${{ secrets.LLM_USAGE_HMAC_SECRET }}"
+    assert "vars.LLM_USAGE_HMAC_SECRET" not in env["LLM_USAGE_HMAC_SECRET"]
+    assert "vars.LLM_USAGE_HMAC_KEY_VERSION" in env["LLM_USAGE_HMAC_KEY_VERSION"]
+    assert "secrets.LLM_USAGE_HMAC_KEY_VERSION" in env["LLM_USAGE_HMAC_KEY_VERSION"]
 
 
 def test_env_example_includes_provider_template_channel_examples() -> None:

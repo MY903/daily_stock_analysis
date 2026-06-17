@@ -103,7 +103,7 @@ The backend exposes a read-only status endpoint at `GET /api/v1/system/config/se
 - External references: LiteLLM Python SDK / OpenAI I/O format / streaming / exception mapping: <https://docs.litellm.ai/>; LiteLLM OpenAI-compatible routing: <https://docs.litellm.ai/docs/providers/openai_compatible>; OpenAI Chat Completions: <https://platform.openai.com/docs/api-reference/chat/create>; JSON mode: <https://platform.openai.com/docs/guides/structured-outputs?api-mode=chat>; tool calling: <https://platform.openai.com/docs/guides/function-calling?api-mode=chat>; streaming: <https://platform.openai.com/docs/guides/streaming-responses?api-mode=chat>; vision input: <https://platform.openai.com/docs/guides/images-vision?api-mode=chat>.
 - Saving channels only updates the keys submitted in that save operation; there is no whole-config silent migration when you switch channel settings. The one deliberate cleanup is runtime model references: if `LITELLM_MODEL`, `AGENT_LITELLM_MODEL`, `VISION_MODEL`, or `LITELLM_FALLBACK_MODELS` point to models that no longer exist in the currently enabled channels, the editor clears/removes those stale references before saving so runtime calls do not keep targeting invalid models. Even when enabled channels expose no selectable models, stale managed-provider values without a matching legacy key are cleaned. `cohere/*`, `google/*`, and `xai/*` are kept as explicit direct-env compatibility examples for legacy retention behavior only, and are not a runtime availability guarantee.
 - Backend consistency basis: runtime validation in `SystemConfigService._validate_llm_runtime_selection` (`src/services/system_config_service.py`) relies on `_uses_direct_env_provider` (`src/config.py`). Only `gemini`, `vertex_ai`, `anthropic`, `openai`, and `deepseek` are treated as managed key-backed providers; `cohere`, `google`, and `xai` are not in that allowlist, so they remain valid direct provider runtime entries.
-- Rollback stays minimal: restore the previous channel model list and re-select the runtime models, or restore the previous `LLM_*`, `LITELLM_MODEL`, `AGENT_LITELLM_MODEL`, `VISION_MODEL`, and `LLM_TEMPERATURE` values from your desktop export / manual `.env` backup. No extra migration script is required.
+- Rollback stays minimal: restore the previous channel model list and re-select the runtime models, or restore the previous `LLM_*`, `LITELLM_MODEL`, `AGENT_LITELLM_MODEL`, `VISION_MODEL`, `LLM_TEMPERATURE`, and `LLM_USAGE_HMAC_*` values from your desktop export / manual `.env` backup. No extra migration script is required.
 - The current dependency constraint for this flow in the repository is `litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0` (see `requirements.txt`). Regression coverage for it lives in `tests/test_system_config_service.py`, `tests/test_system_config_api.py`, and `apps/dsa-web/src/components/settings/__tests__/LLMChannelEditor.test.tsx`.
 
 > **External provider model examples notice**: `cohere/*`, `google/*`, and `xai/*` provider-prefixed values are included here only to describe current runtime retention behavior and are **not** a global availability guarantee. Specific model names in docs or tests are configuration-retention examples, not production recommendations. Check the provider's official model/API docs and validate against the repository dependency constraint `litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0` before production use.
@@ -111,7 +111,7 @@ The backend exposes a read-only status endpoint at `GET /api/v1/system/config/se
 ### Rollback & compatibility evidence
 
 - Scope and cleanup behavior under `litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0`: only runtime references (`LITELLM_MODEL`, `AGENT_LITELLM_MODEL`, `VISION_MODEL`, `LITELLM_FALLBACK_MODELS`) are sanitized during save; non-channel direct providers such as `cohere/*`, `google/*`, and `xai/*` are preserved.
-- Rollback path: export desktop config, then restore the backup through `POST /api/v1/system/config/import`; or manually restore historical `.env` entries (`LITELLM_*`, `AGENT_LITELLM_MODEL`, `VISION_MODEL`, `LLM_TEMPERATURE`) and restart.
+- Rollback path: export desktop config, then restore the backup through `POST /api/v1/system/config/import`; or manually restore historical `.env` entries (`LITELLM_*`, `AGENT_LITELLM_MODEL`, `VISION_MODEL`, `LLM_TEMPERATURE`, `LLM_USAGE_HMAC_*`) and restart.
 - Rollback evidence: `tests/test_system_config_service.py::test_import_desktop_env_restores_runtime_models_after_cleanup` covers restore from exported desktop backup after runtime cleanup.
 - Direct-provider evidence: `tests/test_system_config_service.py::SystemConfigServiceTestCase::test_validate_accepts_minimax_model_as_direct_env_provider`, `test_validate_accepts_cohere_model_as_direct_env_provider`, `test_validate_accepts_google_model_as_direct_env_provider`, and `test_validate_accepts_xai_model_as_direct_env_provider` cover the preserved direct-provider behavior.
 - Frontend regression commands: `cd apps/dsa-web && npm run lint && npm run build && npm run test -- src/components/settings/__tests__/LLMChannelEditor.test.tsx`.
@@ -192,20 +192,31 @@ LITELLM_MODEL=ollama/qwen3:8b
 - If the current environment has no valid Agent model path at all, the ask-stock page still returns a failure and now surfaces the backend's real configuration diagnosis. As soon as you restore any valid model source, the flow recovers without running any migration step.
 - The recommended forward path is still to configure `LITELLM_MODEL` / `AGENT_LITELLM_MODEL` explicitly or move to `LLM_CHANNELS`; legacy provider keys remain a compatibility fallback for older `.env` files, local macOS development, and existing deployments.
 
-### Kimi K2.6 Fixed-Temperature Compatibility Notes
+For the single-agent ask-stock path, the backend also keeps a provider-aware trace track for DeepSeek V4 thinking + tool-call roundtrip. A trace is persisted only when the same run has both `tool_calls` and `reasoning_content`; the last 3 minimal protocol slices per `session_id + provider + model` are spliced back into the next request before the anchored visible assistant reply. Provider trace is either preserved exactly or dropped as a whole; it is never summarized, never returned by Web session-history APIs, and adds no `.env` setting. Model/provider mismatch, summarized anchors, or insufficient budget drop the whole trace. Claude extended thinking is limited in this PR to adapter/storage-level opaque `thinking` / `redacted_thinking` / `signature` block plumbing with offline fixtures; production end-to-end Claude and multi-agent trace injection remain follow-ups. Protocol references: DeepSeek thinking mode (<https://api-docs.deepseek.com/guides/thinking_mode>) and Anthropic Claude extended thinking (<https://platform.claude.com/docs/en/docs/build-with-claude/extended-thinking>). The LiteLLM compatibility window remains `litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0` from `requirements.txt`.
+
+### Strict Temperature Model Compatibility Notes
 
 - Moonshot officially documents Kimi as an OpenAI-compatible API, with `https://api.moonshot.ai/v1` as the base URL: <https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart>
 - LiteLLM officially requires the `openai/` prefix for OpenAI-compatible model routing: <https://docs.litellm.ai/docs/providers/openai_compatible>
 - Moonshot's compatibility docs distinguish two fixed values: **thinking mode must use `1.0`, while non-thinking mode must use `0.6`**; other values are rejected by the API: <https://platform.moonshot.ai/docs/guide/compatibility#parameters-differences-in-request-body>
+- The OpenAI Chat Completions API treats `temperature` as optional. For GPT-5 / o-series style models that only accept the provider default temperature, this project omits `temperature` at request time instead of rewriting your saved `LLM_TEMPERATURE`: <https://platform.openai.com/docs/api-reference/chat/create>
 - The current runtime dependency constraint in this repository is `litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0` (see `requirements.txt`); this compatibility fix is regression-covered under that constraint across the main analyzer, market review, direct Agent LiteLLM calls, and the system-settings channel connectivity test path.
 - This repository therefore normalizes `kimi-k2.6` and `kimi-k2.6-*` right before dispatch based on the **actual request mode**: default / thinking requests use `temperature=1.0`; if your LiteLLM YAML route alias explicitly sets `litellm_params.extra_body.thinking.type: disabled` (or an equivalent non-thinking override), it automatically switches to `temperature=0.6`. Your saved `LLM_TEMPERATURE` value in `.env` or the Web settings is not rewritten.
-- `SystemConfigService` only updates keys that you actually submit when saving from the Web settings page or importing a desktop `.env`; switching to Kimi does not silently clear, migrate, or rewrite an existing `LLM_TEMPERATURE`. The temporary `1.0/0.6` used for Kimi channel tests is request-scoped and is not persisted back into the config file.
-- Non-Kimi primary models, non-Kimi fallbacks, and any request after switching away from Kimi still use your configured temperature. Existing configs do not need migration; changing the model restores the original behavior automatically.
+- If a compatible platform returns an explicit parameter error for a not-yet-profiled model, such as unsupported `temperature`, default-only `1.0`, or unsupported `top_p`, the runtime repairs the **current request** and retries once. The strategy is cached only in the current process after the retry succeeds; it is never written back to `.env`, and a service restart re-evaluates the configured rules normally.
+- For streaming responses that already produced partial content, the runtime does not switch parameters mid-output. It keeps the existing same-model non-stream retry / fallback-model path to avoid stitching inconsistent answers together.
+- `SystemConfigService` only updates keys that you actually submit when saving from the Web settings page or importing a desktop `.env`; switching to a strict-temperature model does not silently clear, migrate, or rewrite an existing `LLM_TEMPERATURE`. Temporary request-time parameter strategies are not persisted back into the config file.
+- Non-strict primary models, non-strict fallbacks, and any request after switching back to a regular model still use your configured temperature. Existing configs do not need migration; changing the model restores the original behavior automatically.
 - Repository-side compatibility coverage lives in `tests/test_llm_channel_config.py`, `tests/test_market_analyzer_generate_text.py`, `tests/test_agent_pipeline.py`, and `tests/test_system_config_service.py`.
-- Minimal rollback: revert only the Kimi fixed-temperature change set; no separate `LLM_TEMPERATURE` migration is required.
+- Minimal rollback: revert only the LLM generation-parameter adaptation change set; no separate `LLM_TEMPERATURE` migration is required.
 
 > **Critical Warning**: If you enable `LLM_CHANNELS`, any standard `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` declared independently will be **completely ignored**. **Use only one mode** to prevent configuration conflicts.
 > **Docker note**: If `LITELLM_MODEL`, `LLM_CHANNELS`, `LLM_DEEPSEEK_MODELS`, or related variables are explicitly passed through `docker compose environment:` or `docker run -e`, they will override the `.env` written by the Web settings page after a container restart. Update the deployment environment at the same time.
+
+### Compatibility evidence and rollback audit notes (for this recovery change)
+
+- Compatibility is validated in two layers: first-party provider/API contract references (LiteLLM OpenAI-compatible routing, OpenAI Chat Completions, Moonshot/Kimi docs and model notes), and second the current runtime implementation in this repository under `litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0`.
+- This recovery path is runtime-only and intentionally local: exception classification + one in-request repair retry + in-process cache. It does not rewrite `.env`, migrate saved config keys, or alter legacy values; it only omits/adjusts request parameters (`temperature`, `top_p`, `presence_penalty`, `frequency_penalty`, `seed`) for the current call. Rolling back requires no migration; restore previous settings and model/provider selection.
+- Regression evidence for this path is in `tests/test_llm_param_recovery.py`, `tests/test_system_config_service.py`, `tests/test_llm_channel_config.py`, `tests/test_system_config_api.py`, `tests/test_market_analyzer_generate_text.py`, `tests/test_agent_pipeline.py`; desktop backup import restore is directly covered by `test_import_desktop_env_restores_runtime_models_after_cleanup`.
 
 ---
 
@@ -239,11 +250,44 @@ model_list:
 
 > **Priority Rule**: YAML is king! If YAML is configured, both **Channels Mode** and **Simple Mode** are entirely ignored. Hierarchy: `YAML > Channels > Simple`.
 
+### LLM usage HMAC telemetry
+
+P0a usage telemetry creates HMAC-SHA256 fingerprints for the actual messages sent to the model. This only writes local `llm_usage` telemetry. It does not change prompts, provider parameters, cache hints, model output, or fallback order.
+
+Usage is read in three tiers:
+
+- Prefer the provider / LiteLLM public `usage` response field.
+- Then read the LiteLLM public `usage_metadata` response field.
+- Only then read `_hidden_params["usage"]`, which is a LiteLLM private/internal best-effort fallback rather than a stable public contract. If it is absent, usage/cache telemetry may be incomplete; the model request itself has not failed for that reason.
+
+Cache-token normalization is allowlisted best-effort normalization only. The external field evidence and runtime boundaries are separated below so provider contracts, current LiteLLM normalization behavior, and repository-specific compatibility allowlists are not treated as the same thing:
+
+| Provider / source | Fields read | Evidence and boundary | Coverage |
+| --- | --- | --- | --- |
+| OpenAI | `usage.prompt_tokens_details.cached_tokens` | The official Prompt Caching docs state that requests below 1024 tokens still expose `cached_tokens=0`: <https://developers.openai.com/api/docs/guides/prompt-caching> | Covered by unit/mock tests; this PR does not include OpenAI live smoke |
+| Anthropic | `cache_creation_input_tokens` / `cache_read_input_tokens` / `input_tokens` | The official Prompt Caching docs define `total_input_tokens = cache_read_input_tokens + cache_creation_input_tokens + input_tokens`: <https://platform.claude.com/docs/en/build-with-claude/prompt-caching> | Covered by unit/mock tests; this PR does not include Anthropic live smoke |
+| Gemini / Vertex AI | Official source field: `UsageMetadata.cachedContentTokenCount`; runtime consumes LiteLLM-exposed snake_case / normalized fields such as `cached_content_token_count`, `cache_read_input_tokens`, or `prompt_tokens_details.cached_tokens` | Gemini `UsageMetadata` official field: <https://ai.google.dev/api/generate-content#UsageMetadata>. This repository does not add native camelCase runtime fallback; runtime compatibility is bounded to `litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0` | Covered by unit/mock tests; this PR does not include Gemini / Vertex live smoke |
+| DeepSeek | `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` | DeepSeek Chat Completion docs state that `prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens`: <https://api-docs.deepseek.com/api/create-chat-completion> | Covered by unit/mock tests; this PR includes one redacted DeepSeek smoke only and does not store the full response |
+| GLM / OpenAI-compatible / StepFun and similar compatible platforms | Values from the modeled token/cache count allowlist that can be normalized to common fields | No stable official cache telemetry contract is claimed here; this is best-effort normalization under the current LiteLLM / OpenAI-compatible shape. Unmodeled metadata is not persisted | Covered by unit/fixture/mock tests; this PR does not include live smoke for these providers |
+| LiteLLM public response shape | `usage` / `usage_metadata` | Consumed according to the response / `Usage` object shape in the current dependency window `litellm>=1.80.10,!=1.82.7,!=1.82.8,<2.0.0`; this is not a LiteLLM 2.x compatibility guarantee | Covered by Analyzer / Agent / usage tests |
+| LiteLLM private fallback | `_hidden_params["usage"]` | Private/internal best-effort fallback, not a stable LiteLLM public contract. It only fills narrow streaming telemetry gaps such as public zero-only/no-signal usage and does not change provider request parameters | Covered by unit/mock tests; absence only affects telemetry completeness, not model request success |
+
+```env
+LLM_USAGE_HMAC_SECRET=
+LLM_USAGE_HMAC_KEY_VERSION=local-v1
+```
+
+- When `LLM_USAGE_HMAC_SECRET` is empty, the backend creates `.llm_usage_hmac_secret` in the data directory for local deployment-scoped comparisons.
+- Set the same high-entropy random secret only when multiple deployments intentionally need comparable HMACs; generate one with `openssl rand -hex 32`.
+- `.llm_usage_hmac_secret` is a local secret artifact and is ignored by filename in `.gitignore`.
+- When rotating the secret, update `LLM_USAGE_HMAC_KEY_VERSION` so old and new fingerprints are not compared as if they used the same key.
+- Do not reuse the login session secret and do not commit or expose the real secret in version control, issues, logs, or screenshots.
+
 ### GitHub Actions Notes
 
-The bundled `daily_analysis.yml` explicitly passes the common LLM runtime fields to the job environment:
+The bundled `00-daily-analysis.yml` explicitly passes the common LLM runtime fields to the job environment:
 
-- Runtime selection: `LLM_CHANNELS`, `LITELLM_MODEL`, `LITELLM_FALLBACK_MODELS`, `AGENT_LITELLM_MODEL`, `VISION_MODEL`, `VISION_PROVIDER_PRIORITY`, `LLM_TEMPERATURE`
+- Runtime selection: `LLM_CHANNELS`, `LITELLM_MODEL`, `LITELLM_FALLBACK_MODELS`, `AGENT_LITELLM_MODEL`, `VISION_MODEL`, `VISION_PROVIDER_PRIORITY`, `LLM_TEMPERATURE`, `LLM_USAGE_HMAC_SECRET`, `LLM_USAGE_HMAC_KEY_VERSION`
 - Multiple keys: `GEMINI_API_KEYS`, `ANTHROPIC_API_KEYS`, `OPENAI_API_KEYS`, `DEEPSEEK_API_KEYS` (the current workflow imports these from repository Secrets only, not from same-named Variables)
 - Common channel names: `primary`, `secondary`, `aihubmix`, `deepseek`, `dashscope`, `zhipu`, `moonshot`, `minimax`, `volcengine`, `siliconflow`, `openrouter`, `gemini`, `anthropic`, `openai`, `ollama`
 
@@ -285,6 +329,7 @@ Afraid you got the config wrong? Type the following commands in your terminal to
 | **I added multiple provider Keys, why is only one working?** | You mixed the **Simple Mode** and **Channels Mode**! | Choose one path. For simple setups, delete anything starting with `LLM_CHANNELS`. To use multi-model fallbacks, migrate all your Keys into the `LLM_CHANNELS` setup. |
 | **Returns 400, 401, or Invalid API Key** | The API Key is wrong, copied incompletely, account lacks credits, or you mistyped the model name (extremely common). | 1. Ensure there are no spaces at the start/end of your Key.<br> 2. Ensure your Base URL ends with `/v1`.<br> 3. Check if you forgot the `openai/` prefix on the model name! |
 | **Kimi K2.6 returns `invalid temperature` (it may say only `1.0` or `0.6` is allowed)** | The model requires different fixed temperatures for thinking vs non-thinking mode, while older config or call paths may still pass `0.7`. | After this fix, default / thinking `kimi-k2.6` requests automatically use `temperature=1.0`; if you explicitly disable thinking in a LiteLLM YAML route, the request automatically uses `0.6` instead. Prefer `openai/kimi-k2.6` with your Moonshot or relay OpenAI-compatible Base URL and API key. Non-Kimi fallbacks still keep your configured `LLM_TEMPERATURE`. |
+| **GPT-5 / o-series returns that `temperature` is unsupported or only the default is allowed** | These models only accept the provider default sampling parameters, while older call paths may still send `0.7`. | The request layer now omits `temperature` so the provider default is used. Your `.env` / Web `LLM_TEMPERATURE` is not rewritten, and regular models keep using it after you switch back. |
 | **Spins endlessly, eventually hits Timeout/ConnectionRefused** | You are using restricted APIs (like Google/OpenAI) in a blocked region without a proxy, or your cloud server lacks external internet access. | Highly recommend using **official regional APIs** (like DeepSeek) or **OpenAI-compatible relay platforms**. Third-party platforms bypass these network constraints. |
 | **Ollama returns 404, `Could not get model info`, or `api/generate/api/show`** | Using `OPENAI_BASE_URL` for Ollama makes the system concatenate URLs incorrectly | Use `OLLAMA_API_BASE=http://localhost:11434` or channel mode (`LLM_CHANNELS=ollama` + `LLM_OLLAMA_BASE_URL`) instead |
 

@@ -88,6 +88,12 @@ class SystemConfigApiTestCase(unittest.TestCase):
             cookies=cookies if cookies is not None else {system_config.COOKIE_NAME: "valid-session-token"}
         )
 
+    def _rewrite_env(self, *lines: str) -> None:
+        self.env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        Config.reset_instance()
+        self.manager = ConfigManager(env_path=self.env_path)
+        self.service = SystemConfigService(manager=self.manager)
+
     def _build_client_app(self) -> FastAPI:
         app = FastAPI()
 
@@ -99,11 +105,29 @@ class SystemConfigApiTestCase(unittest.TestCase):
         add_auth_middleware(app)
         return app
 
-    def test_get_config_returns_raw_secret_value(self) -> None:
+    def test_get_config_keeps_regular_secret_value_unmasked(self) -> None:
         payload = system_config.get_system_config(include_schema=True, service=self.service).model_dump(by_alias=True)
         item_map = {item["key"]: item for item in payload["items"]}
         self.assertEqual(item_map["GEMINI_API_KEY"]["value"], "secret-key-value")
         self.assertFalse(item_map["GEMINI_API_KEY"]["is_masked"])
+
+    def test_get_config_masks_llm_usage_hmac_secret(self) -> None:
+        self._rewrite_env(
+            "STOCK_LIST=600519,000001",
+            "GEMINI_API_KEY=secret-key-value",
+            "LLM_USAGE_HMAC_SECRET=telemetry-secret",
+            "LLM_USAGE_HMAC_KEY_VERSION=test-v1",
+            "ADMIN_AUTH_ENABLED=true",
+        )
+
+        payload = system_config.get_system_config(include_schema=True, service=self.service).model_dump(by_alias=True)
+        item_map = {item["key"]: item for item in payload["items"]}
+
+        self.assertEqual(item_map["LLM_USAGE_HMAC_SECRET"]["value"], payload["mask_token"])
+        self.assertTrue(item_map["LLM_USAGE_HMAC_SECRET"]["is_masked"])
+        self.assertTrue(item_map["LLM_USAGE_HMAC_SECRET"]["raw_value_exists"])
+        self.assertEqual(item_map["LLM_USAGE_HMAC_KEY_VERSION"]["value"], "test-v1")
+        self.assertFalse(item_map["LLM_USAGE_HMAC_KEY_VERSION"]["is_masked"])
 
     def test_get_config_schema_includes_help_metadata(self) -> None:
         payload = system_config.get_system_config(include_schema=True, service=self.service).model_dump(by_alias=True)
@@ -246,9 +270,34 @@ class SystemConfigApiTestCase(unittest.TestCase):
 
         self.assertIn("非 schedule 模式", run_warning)
         self.assertNotIn("以 schedule 模式", run_warning)
-        self.assertIn("不会自动重建 scheduler", schedule_warning)
+        self.assertIn("不会因为本次保存启动、停止或重建 scheduler", schedule_warning)
         self.assertIn("以 schedule 模式重新启动后生效", schedule_warning)
         self.assertNotIn("它属于启动期单次运行配置", schedule_warning)
+
+    def test_put_config_returns_schedule_time_runtime_rebind_warning(self) -> None:
+        current = system_config.get_system_config(include_schema=False, service=self.service).model_dump()
+        payload = system_config.update_system_config(
+            request=UpdateSystemConfigRequest(
+                config_version=current["config_version"],
+                reload_now=True,
+                items=[
+                    {"key": "SCHEDULE_TIME", "value": "09:30"},
+                ],
+            ),
+            service=self.service,
+        ).model_dump()
+
+        self.assertTrue(payload["success"])
+        schedule_time_warning = next(
+            warning
+            for warning in payload["warnings"]
+            if "SCHEDULE_TIME=09:30 已写入 .env" in warning
+        )
+
+        self.assertIn("已经以 schedule 模式运行", schedule_time_warning)
+        self.assertIn("自动重建 daily job", schedule_time_warning)
+        self.assertIn("不会启动 scheduler", schedule_time_warning)
+        self.assertNotIn("重启当前进程", schedule_time_warning)
 
     def test_export_system_config_returns_raw_env_content(self) -> None:
         self.env_path.write_text(

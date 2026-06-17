@@ -10,31 +10,24 @@ A股自选股智能分析系统 - AI分析层
 3. 解析 LLM 响应为结构化 AnalysisResult
 """
 
-import asyncio
 import json
 import logging
 import math
 import re
 import time
-import subprocess
-import os
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple, Callable
-
-# 引入专家委员会相关类
-from src.agents.experts.warren_buffett import WarrenBuffettExpert
-from src.agents.experts.li_lu import LiLuExpert
-from src.agents.experts.paul_tudor_jones import PaulTudorJonesExpert
-from src.agents.experts.jensen_huang import JensenHuangExpert
-from src.agents.experts.nassim_taleb import NassimTalebExpert
-from src.agents.consensus_engine import RayDalioAggregator
-from src.services.performance_tracker import PerformanceTracker
 
 import litellm
 from json_repair import repair_json
 from litellm import Router
 
-from src.agent.llm_adapter import get_thinking_extra_body
+from src.agent.llm_adapter import (
+    get_thinking_extra_body,
+    resolve_fallback_litellm_wire_models,
+    register_fallback_model_pricing,
+)
+from src.agent.provider_trace import resolved_model_provider_identity
 from src.agent.skills.defaults import CORE_TRADING_SKILL_POLICY_ZH
 from src.config import (
     Config,
@@ -43,7 +36,15 @@ from src.config import (
     get_config,
     get_configured_llm_models,
     normalize_litellm_temperature,
+    resolve_litellm_wire_model,
     resolve_news_window_days,
+)
+from src.llm.generation_params import apply_litellm_generation_params
+from src.llm.errors import call_litellm_with_param_recovery
+from src.llm.usage import (
+    attach_message_hmacs,
+    extract_usage_payload,
+    normalize_litellm_usage,
 )
 from src.storage import persist_llm_usage
 from src.data.stock_mapping import STOCK_NAME_MAP
@@ -52,13 +53,18 @@ from src.report_language import (
     get_no_data_text,
     get_placeholder_text,
     get_unknown_text,
+    get_chip_unavailable_text,
     infer_decision_type_from_advice,
+    is_chip_placeholder_value,
     localize_chip_health,
     localize_confidence_level,
     normalize_report_language,
 )
+from src.schemas.decision_action import build_action_fields
 from src.schemas.report_schema import AnalysisReportSchema
 from src.market_context import get_market_role, get_market_guidelines
+from src.services.daily_market_context import format_daily_market_context_prompt_section
+from src.market_phase_prompt import format_market_phase_prompt_section
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +92,76 @@ def _normalize_risk_warning_values(value: Any) -> List[str]:
         return [text] if text else []
     text = str(value).strip()
     return [text] if text else []
+
+
+def _today_has_realtime_overlay(today: Any) -> bool:
+    if not isinstance(today, dict):
+        return False
+    data_source = today.get("data_source") or today.get("dataSource")
+    if isinstance(data_source, str) and data_source.startswith("realtime:"):
+        return True
+    if today.get("is_partial_bar") is True or today.get("isPartialBar") is True:
+        return True
+    if today.get("is_estimated") is True or today.get("isEstimated") is True:
+        return True
+    return bool(today.get("estimated_fields") or today.get("estimatedFields"))
+
+
+def _today_looks_complete_daily_bar(
+    context: Dict[str, Any],
+    phase_context: Dict[str, Any],
+) -> bool:
+    today = context.get("today")
+    if (
+        not isinstance(today, dict)
+        or today.get("close") in (None, "")
+        or _today_has_realtime_overlay(today)
+    ):
+        return False
+
+    effective_date = phase_context.get("effective_daily_bar_date")
+    today_date = today.get("date") or today.get("trade_date") or context.get("date")
+    if effective_date and today_date and str(today_date) != str(effective_date):
+        return False
+    return True
+
+
+def _phase_aware_quote_labels(context: Dict[str, Any]) -> Tuple[str, str]:
+    """Choose Chinese quote-table labels that do not conflict with phase context."""
+    phase_context = context.get("market_phase_context")
+    if not isinstance(phase_context, dict):
+        return "今日行情", "收盘价"
+
+    phase = str(phase_context.get("phase") or "").strip()
+    if phase in {"premarket", "non_trading"}:
+        today = context.get("today")
+        if _today_looks_complete_daily_bar(context, phase_context):
+            return "上一完整交易日行情", "上一完整交易日收盘价"
+        if _today_has_realtime_overlay(today):
+            return "最新行情", "实时估算价"
+        if isinstance(today, dict) and today.get("close") not in (None, ""):
+            return "最新行情", "最新价"
+        return "今日行情", "收盘价"
+
+    if (
+        phase in {"intraday", "lunch_break", "closing_auction"}
+        and phase_context.get("is_partial_bar") is True
+    ):
+        return "最新行情", "盘中估算价"
+
+    return "今日行情", "收盘价"
+
+
+def _should_hide_regular_session_ohlc(context: Dict[str, Any]) -> bool:
+    phase_context = context.get("market_phase_context")
+    if not isinstance(phase_context, dict):
+        return False
+
+    phase = str(phase_context.get("phase") or "").strip()
+    return phase in {"premarket", "non_trading"} and not _today_looks_complete_daily_bar(
+        context,
+        phase_context,
+    )
 
 
 class _LiteLLMStreamError(RuntimeError):
@@ -124,7 +200,11 @@ class _AllModelsFailedError(Exception):
         self.last_usage = last_usage or {}
 
 
-def check_content_integrity(result: "AnalysisResult") -> Tuple[bool, List[str]]:
+def check_content_integrity(
+    result: "AnalysisResult",
+    *,
+    require_phase_decision: bool = False,
+) -> Tuple[bool, List[str]]:
     """
     Check mandatory fields for report content integrity.
     Returns (pass, missing_fields). Module-level for use by pipeline (agent weak mode).
@@ -175,6 +255,23 @@ def check_content_integrity(result: "AnalysisResult") -> Tuple[bool, List[str]]:
         stop_loss = sp.get("stop_loss")
         if _is_invalid_stop_loss(stop_loss):
             missing.append("dashboard.battle_plan.sniper_points.stop_loss")
+    if require_phase_decision:
+        phase_decision = dash.get("phase_decision")
+        phase_decision = phase_decision if isinstance(phase_decision, dict) else {}
+        if not isinstance(phase_decision.get("phase_context"), dict):
+            missing.append("dashboard.phase_decision.phase_context")
+        if _is_blank_text(phase_decision.get("action_window")):
+            missing.append("dashboard.phase_decision.action_window")
+        if _is_blank_text(phase_decision.get("immediate_action")):
+            missing.append("dashboard.phase_decision.immediate_action")
+        if not isinstance(phase_decision.get("watch_conditions"), list):
+            missing.append("dashboard.phase_decision.watch_conditions")
+        if _is_blank_text(phase_decision.get("next_check_time")):
+            missing.append("dashboard.phase_decision.next_check_time")
+        if _is_blank_text(phase_decision.get("confidence_reason")):
+            missing.append("dashboard.phase_decision.confidence_reason")
+        if not isinstance(phase_decision.get("data_limitations"), list):
+            missing.append("dashboard.phase_decision.data_limitations")
     return len(missing) == 0, missing
 
 
@@ -200,7 +297,30 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
             return not value.strip()
         return False
 
-    placeholder = get_placeholder_text(getattr(result, "report_language", "zh"))
+    report_language = normalize_report_language(getattr(result, "report_language", "zh"))
+    placeholder = get_placeholder_text(report_language)
+    phase_decision_placeholders = {
+        "dashboard.phase_decision.action_window": (
+            "Model did not provide a phase action window"
+            if report_language == "en"
+            else "模型未提供阶段化行动窗口"
+        ),
+        "dashboard.phase_decision.immediate_action": (
+            "Model did not provide a phase-aware immediate action"
+            if report_language == "en"
+            else "模型未提供阶段化即时动作"
+        ),
+        "dashboard.phase_decision.next_check_time": (
+            "Model did not provide a next check point"
+            if report_language == "en"
+            else "模型未提供下一次检查点"
+        ),
+        "dashboard.phase_decision.confidence_reason": (
+            "Model did not provide a phase confidence rationale"
+            if report_language == "en"
+            else "模型未提供阶段化置信度理由"
+        ),
+    }
     for field in missing_fields:
         if field == "sentiment_score":
             result.sentiment_score = 50
@@ -247,6 +367,25 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
                 battle_plan["sniper_points"] = sniper_points
             if _is_invalid_stop_loss(sniper_points.get("stop_loss")):
                 sniper_points["stop_loss"] = placeholder
+        elif field.startswith("dashboard.phase_decision."):
+            if not result.dashboard:
+                result.dashboard = {}
+            phase_decision = result.dashboard.get("phase_decision")
+            if not isinstance(phase_decision, dict):
+                phase_decision = {}
+                result.dashboard["phase_decision"] = phase_decision
+            if field == "dashboard.phase_decision.phase_context":
+                if not isinstance(phase_decision.get("phase_context"), dict):
+                    phase_decision["phase_context"] = {}
+            elif field == "dashboard.phase_decision.watch_conditions":
+                if not isinstance(phase_decision.get("watch_conditions"), list):
+                    phase_decision["watch_conditions"] = []
+            elif field == "dashboard.phase_decision.data_limitations":
+                if not isinstance(phase_decision.get("data_limitations"), list):
+                    phase_decision["data_limitations"] = []
+            elif field in phase_decision_placeholders:
+                if _is_blank_text(phase_decision.get(field.rsplit(".", 1)[-1])):
+                    phase_decision[field.rsplit(".", 1)[-1]] = phase_decision_placeholders[field]
 
 
 # ---------- chip_structure fallback (Issue #589) ----------
@@ -256,12 +395,7 @@ _CHIP_KEYS: tuple = ("profit_ratio", "avg_cost", "concentration", "chip_health")
 
 def _is_value_placeholder(v: Any) -> bool:
     """True if value is empty or placeholder (N/A, 数据缺失, etc.)."""
-    if v is None:
-        return True
-    if isinstance(v, (int, float)) and v == 0:
-        return True
-    s = str(v).strip().lower()
-    return s in ("", "n/a", "na", "数据缺失", "未知", "data unavailable", "unknown", "tbd")
+    return is_chip_placeholder_value(v)
 
 
 _RISK_WARNING_PLACEHOLDER_TEXTS = {
@@ -353,6 +487,20 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
         return float(str(v).strip())
     except (TypeError, ValueError):
         return default
+
+
+def _coerce_chip_metric(v: Any) -> Optional[float]:
+    """Convert chip metrics while preserving the distinction between missing and zero."""
+    if v is None:
+        return None
+    try:
+        numeric = float(v)
+    except (TypeError, ValueError):
+        try:
+            numeric = float(str(v).strip())
+        except (TypeError, ValueError):
+            return None
+    return None if math.isnan(numeric) else numeric
 
 
 _BULLISH_TREND_HINTS: Tuple[str, ...] = (
@@ -611,9 +759,56 @@ def _build_chip_structure_from_data(chip_data: Any, language: str = "zh") -> Dic
     }
 
 
+def _has_meaningful_chip_data(chip_data: Any) -> bool:
+    """Return True when chip data has the core metrics required for reporting."""
+    if not chip_data:
+        return False
+    if hasattr(chip_data, "avg_cost"):
+        avg_cost = _coerce_chip_metric(getattr(chip_data, "avg_cost", None))
+        concentration_90 = _coerce_chip_metric(getattr(chip_data, "concentration_90", None))
+        concentration_70 = _coerce_chip_metric(getattr(chip_data, "concentration_70", None))
+    else:
+        d = chip_data if isinstance(chip_data, dict) else {}
+        avg_cost = _coerce_chip_metric(d.get("avg_cost"))
+        concentration_90_value = d.get("concentration_90")
+        if concentration_90_value is None:
+            concentration_90_value = d.get("concentration")
+        concentration_90 = _coerce_chip_metric(concentration_90_value)
+        concentration_70 = _coerce_chip_metric(d.get("concentration_70"))
+    return (
+        avg_cost is not None
+        and avg_cost > 0
+        and (
+            (concentration_90 is not None and concentration_90 >= 0)
+            or (concentration_70 is not None and concentration_70 >= 0)
+        )
+    )
+
+
+def _mark_chip_structure_unavailable(result: "AnalysisResult", language: str) -> None:
+    if not result or not isinstance(result.dashboard, dict):
+        return
+    data_perspective = result.dashboard.get("data_perspective")
+    if not isinstance(data_perspective, dict):
+        return
+    data_perspective["chip_structure"] = {}
+    data_perspective["chip_unavailable_reason"] = get_chip_unavailable_text(language)
+
+
+def normalize_chip_structure_availability(result: "AnalysisResult", chip_data: Any) -> None:
+    """Fill valid chip metrics or collapse placeholder-only chip fields to one fallback line."""
+    if not result:
+        return
+    language = getattr(result, "report_language", "zh")
+    if _has_meaningful_chip_data(chip_data):
+        fill_chip_structure_if_needed(result, chip_data)
+        return
+    _mark_chip_structure_unavailable(result, language)
+
+
 def fill_chip_structure_if_needed(result: "AnalysisResult", chip_data: Any) -> None:
     """When chip_data exists, fill chip_structure placeholder fields from chip_data (in-place)."""
-    if not result or not chip_data:
+    if not result or not _has_meaningful_chip_data(chip_data):
         return
     try:
         if not result.dashboard:
@@ -733,23 +928,38 @@ def stabilize_decision_with_structure(
             price_position.get("resistance_level"),
             _first_list_value(trend_dict.get("resistance_levels")),
         )
-        flow_bias, flow_reason = _capital_flow_bias_with_status(fundamental_context)
-        if flow_bias == "unavailable":
-            if isinstance(fundamental_context, dict) and "capital_flow" in fundamental_context:
-                _set_decision_stability_unavailable(
-                    result,
-                    language,
-                    current_price=current_price,
-                    support=support,
-                    resistance=resistance,
-                    flow_status=flow_reason,
-                )
-            return
         decision_type = infer_decision_type_from_advice(
             getattr(result, "decision_type", ""),
             default=getattr(result, "decision_type", "hold") or "hold",
         )
         decision_type = decision_type if decision_type in {"buy", "hold", "sell"} else "hold"
+        advice_decision_type = infer_decision_type_from_advice(
+            getattr(result, "operation_advice", ""),
+            default="",
+        )
+
+        flow_bias, flow_reason = _capital_flow_bias_with_status(fundamental_context)
+        if flow_bias == "unavailable":
+            if isinstance(fundamental_context, dict) and "capital_flow" in fundamental_context:
+                if decision_type == "buy" or advice_decision_type == "buy":
+                    _downgrade_buy_without_capital_flow(
+                        result,
+                        language,
+                        current_price=current_price,
+                        support=support,
+                        resistance=resistance,
+                        flow_status=flow_reason,
+                    )
+                else:
+                    _set_decision_stability_unavailable(
+                        result,
+                        language,
+                        current_price=current_price,
+                        support=support,
+                        resistance=resistance,
+                        flow_status=flow_reason,
+                    )
+            return
 
         if current_price is None:
             return
@@ -1031,6 +1241,107 @@ def _set_decision_stability_unavailable(
     _sync_stability_dashboard_fields(result)
 
 
+def _bound_hold_watch_sentiment_score(result: "AnalysisResult") -> None:
+    try:
+        score = int(getattr(result, "sentiment_score", 50))
+    except (TypeError, ValueError):
+        score = 50
+    result.sentiment_score = min(59, max(45, score))
+
+
+def _apply_hold_watch_dashboard(
+    result: "AnalysisResult",
+    language: str,
+    *,
+    advice: str,
+    reason: str,
+    current_price: Optional[float],
+    support: Optional[float],
+    resistance: Optional[float],
+    flow_bias: str,
+    no_position: str,
+    has_position: str,
+    capital_flow_status: Optional[str] = None,
+) -> None:
+    result.operation_advice = advice
+
+    dashboard = result.dashboard if isinstance(result.dashboard, dict) else {}
+    result.dashboard = dashboard
+    core = dashboard.get("core_conclusion")
+    if not isinstance(core, dict):
+        core = {}
+        dashboard["core_conclusion"] = core
+    core["signal_type"] = "🟡持有观望" if language == "zh" else "🟡 Hold / Watch"
+    core["one_sentence"] = f"{advice}：{reason}" if language == "zh" else f"{advice}: {reason}"
+
+    position_advice = core.get("position_advice")
+    if not isinstance(position_advice, dict):
+        position_advice = {}
+        core["position_advice"] = position_advice
+    position_advice["no_position"] = no_position
+    position_advice["has_position"] = has_position
+
+    stability = {
+        "applied": True,
+        "reason": reason,
+        "current_price": current_price,
+        "support": support,
+        "resistance": resistance,
+        "capital_flow_bias": flow_bias,
+    }
+    if capital_flow_status is not None:
+        stability["capital_flow_status"] = capital_flow_status
+    dashboard["decision_stability"] = stability
+
+    if reason and reason not in str(result.risk_warning or ""):
+        sep = "；" if language == "zh" else "; "
+        result.risk_warning = f"{result.risk_warning}{sep}{reason}" if result.risk_warning else reason
+    result.buy_reason = reason or result.buy_reason
+
+
+def _downgrade_buy_without_capital_flow(
+    result: "AnalysisResult",
+    language: str,
+    *,
+    current_price: Optional[float],
+    support: Optional[float],
+    resistance: Optional[float],
+    flow_status: str,
+) -> None:
+    status_text = _capital_flow_status_for_stability(flow_status, language)
+    if language == "zh":
+        advice = "持有观察"
+        reason = f"{status_text}，买入结论缺少资金面确认，先按观察处理。"
+        no_position = "空仓先不追买，等待资金流恢复、支撑确认或有效突破后再行动。"
+        has_position = "持仓以关键支撑为风控线，资金流恢复前控制仓位。"
+        confidence = "低"
+    else:
+        advice = "Hold and watch"
+        reason = f"{status_text}; the buy call lacks capital-flow confirmation, so treat it as watch-only."
+        no_position = "Do not chase; wait for capital-flow recovery, support confirmation, or a valid breakout."
+        has_position = "Use key support as the risk line and keep position size controlled until capital flow recovers."
+        confidence = "Low"
+
+    result.decision_type = "hold"
+    result.confidence_level = confidence
+    _bound_hold_watch_sentiment_score(result)
+    _apply_hold_watch_dashboard(
+        result,
+        language,
+        advice=advice,
+        reason=reason,
+        current_price=current_price,
+        support=support,
+        resistance=resistance,
+        flow_bias="unavailable",
+        no_position=no_position,
+        has_position=has_position,
+        capital_flow_status=status_text,
+    )
+    _sync_stability_dashboard_fields(result)
+    logger.info("[decision_stability] Downgraded buy because capital flow is unavailable: %s", flow_status)
+
+
 def _downgrade_to_structural_hold(
     result: "AnalysisResult",
     language: str,
@@ -1043,11 +1354,7 @@ def _downgrade_to_structural_hold(
     flow_bias: str,
 ) -> None:
     result.decision_type = "hold"
-    try:
-        score = int(getattr(result, "sentiment_score", 50))
-    except (TypeError, ValueError):
-        score = 50
-    result.sentiment_score = min(59, max(45, score))
+    _bound_hold_watch_sentiment_score(result)
     _set_structural_hold_wording(
         result,
         language,
@@ -1108,37 +1415,24 @@ def _set_structural_hold_wording(
     elif language == "en" and advice_key == "range":
         result.trend_prediction = "Sideways"
 
-    dashboard = result.dashboard if isinstance(result.dashboard, dict) else {}
-    result.dashboard = dashboard
-    core = dashboard.get("core_conclusion")
-    if not isinstance(core, dict):
-        core = {}
-        dashboard["core_conclusion"] = core
-    core["signal_type"] = "🟡持有观望" if language == "zh" else "🟡 Hold / Watch"
-    core["one_sentence"] = f"{advice}：{reason}" if language == "zh" else f"{advice}: {reason}"
-    position_advice = core.get("position_advice")
-    if not isinstance(position_advice, dict):
-        position_advice = {}
-        core["position_advice"] = position_advice
     if language == "zh":
-        position_advice["no_position"] = "空仓先不追涨杀跌，等待支撑确认、放量突破或资金回流后再行动。"
-        position_advice["has_position"] = "持仓以关键支撑为风控线，未跌破前以观察和分批控仓为主。"
+        no_position = "空仓先不追涨杀跌，等待支撑确认、放量突破或资金回流后再行动。"
+        has_position = "持仓以关键支撑为风控线，未跌破前以观察和分批控仓为主。"
     else:
-        position_advice["no_position"] = "Do not chase or panic; wait for support confirmation, breakout, or renewed inflow."
-        position_advice["has_position"] = "Use key support as the risk line and manage position size unless support fails."
-
-    dashboard["decision_stability"] = {
-        "applied": True,
-        "reason": reason,
-        "current_price": current_price,
-        "support": support,
-        "resistance": resistance,
-        "capital_flow_bias": flow_bias,
-    }
-    if reason and reason not in str(result.risk_warning or ""):
-        sep = "；" if language == "zh" else "; "
-        result.risk_warning = f"{result.risk_warning}{sep}{reason}" if result.risk_warning else reason
-    result.buy_reason = reason or result.buy_reason
+        no_position = "Do not chase or panic; wait for support confirmation, breakout, or renewed inflow."
+        has_position = "Use key support as the risk line and manage position size unless support fails."
+    _apply_hold_watch_dashboard(
+        result,
+        language,
+        advice=advice,
+        reason=reason,
+        current_price=current_price,
+        support=support,
+        resistance=resistance,
+        flow_bias=flow_bias,
+        no_position=no_position,
+        has_position=has_position,
+    )
     logger.info("[decision_stability] Applied structural hold calibration: %s", reason_key)
 
 
@@ -1219,6 +1513,8 @@ class AnalysisResult:
     decision_type: str = "hold"  # 决策类型：buy/hold/sell（用于统计）
     confidence_level: str = "中"  # 置信度：高/中/低
     report_language: str = "zh"  # 报告输出语言：zh/en
+    action: Optional[str] = None  # 建议动作 taxonomy：buy/add/hold/reduce/sell/watch/avoid/alert
+    action_label: Optional[str] = None  # 本地化建议动作标签
 
     # ========== 决策仪表盘 (新增) ==========
     dashboard: Optional[Dict[str, Any]] = None  # 完整的决策仪表盘数据
@@ -1268,6 +1564,9 @@ class AnalysisResult:
     # ========== 历史对比（Report Engine P0）==========
     query_id: Optional[str] = None  # 本次分析 query_id，用于历史对比时排除本次记录
 
+    # ========== 基本面上下文（仅运行时，用于通知拼装；不持久化到 to_dict）==========
+    fundamental_context: Optional[Dict[str, Any]] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -1279,6 +1578,8 @@ class AnalysisResult:
             'decision_type': self.decision_type,
             'confidence_level': self.confidence_level,
             'report_language': self.report_language,
+            'action': self.action,
+            'action_label': self.action_label,
             'dashboard': self.dashboard,  # 决策仪表盘数据
             'trend_analysis': self.trend_analysis,
             'short_term_outlook': self.short_term_outlook,
@@ -1360,64 +1661,29 @@ class AnalysisResult:
         }
         return star_map.get(str(self.confidence_level or "").strip().lower(), "⭐⭐")
 
-    def get_radar_data(self) -> List[Dict[str, Any]]:
-        """
-        获取雷达图数据
-        
-        维度：技术面、基本面、情绪面、资金流、风险度
-        """
-        # 默认值
-        tech_score = 50
-        fund_score = 50
-        sent_score = self.sentiment_score
-        flow_score = 50
-        risk_score = 50
 
-        if self.dashboard:
-            # 1. 技术面 (如果有 trend_score 则用，否则基于 sentiment_score 微调)
-            dp = self.dashboard.get("data_perspective", {})
-            tech_score = dp.get("trend_status", {}).get("trend_score", 
-                                                      min(100, max(0, int(self.sentiment_score * 0.9 + 5))))
-            
-            # 2. 资金流 (基于量比简单推算)
-            vol_ratio = dp.get("volume_analysis", {}).get("volume_ratio", 1.0)
-            try:
-                vr = float(vol_ratio) if vol_ratio and vol_ratio != "N/A" else 1.0
-                flow_score = min(100, max(0, int(50 + (vr - 1.0) * 20)))
-            except (ValueError, TypeError):
-                flow_score = 50
+def populate_decision_action_fields(
+    result: AnalysisResult,
+    *,
+    explicit_action: Any = None,
+    report_type: Any = None,
+    use_existing_action: bool = True,
+) -> AnalysisResult:
+    """Populate optional decision action fields without changing legacy advice."""
 
-            # 3. 风险度 (100 - 风险项数量*10)
-            risks = self.dashboard.get("intelligence", {}).get("risk_alerts", [])
-            # 保存分歧惩罚标志，待 risk_alerts 分算完后叠加，避免被覆盖
-            divergence_penalty = False
-            if self.dashboard.get("ensemble_reports"):
-                divergence = self.risk_warning or ""
-                if "分歧" in divergence or "争议" in divergence:
-                    divergence_penalty = True
-            risk_score = max(0, 100 - len(risks) * 10)
-            # 叠加委员会分歧惩罚：取两者最严格值
-            if divergence_penalty:
-                risk_score = min(risk_score, 40)
+    action_source = explicit_action
+    if action_source is None and use_existing_action:
+        action_source = getattr(result, "action", None)
 
-            # 4. 基本面 (简单基于关键词或专家共识评分)
-            fund_analysis = (self.fundamental_analysis or "").lower()
-            if "增长" in fund_analysis or "优秀" in fund_analysis or "稳健" in fund_analysis:
-                fund_score = 75
-            elif "下滑" in fund_analysis or "亏损" in fund_analysis or "风险" in fund_analysis:
-                fund_score = 25
-            
-            # 如果是委员会模式，专家的一致性可以提升基本面信心
-            if self.dashboard.get("ensemble_reports"):
-                fund_score = max(fund_score, 60) # 委员会通常会关注基本面
-
-        return [
-            {"subject": "技术面", "value": tech_score, "fullMark": 100},
-            {"subject": "基本面", "value": fund_score, "fullMark": 100},
-            {"subject": "情绪面", "value": sent_score, "fullMark": 100},
-            {"subject": "资金流", "value": flow_score, "fullMark": 100},
-            {"subject": "风险度", "value": risk_score, "fullMark": 100},
-        ]
+    fields = build_action_fields(
+        operation_advice=getattr(result, "operation_advice", None),
+        explicit_action=action_source,
+        report_type=report_type,
+        report_language=getattr(result, "report_language", "zh"),
+    )
+    result.action = fields["action"]
+    result.action_label = fields["action_label"]
+    return result
 
 
 class GeminiAnalyzer:
@@ -1529,6 +1795,16 @@ class GeminiAnalyzer:
                 "✅/⚠️/❌ 检查项5：筹码健康",
                 "✅/⚠️/❌ 检查项6：PE估值合理"
             ]
+        },
+
+        "phase_decision": {
+            "phase_context": {"phase": "premarket/intraday/lunch_break/closing_auction/postmarket/non_trading/unknown"},
+            "action_window": "盘前计划/盘中跟踪/午间确认/收盘前风控/盘后复盘/非交易日观察",
+            "immediate_action": "立即行动/等待确认/观察/止损止盈预警/禁止追高/无盘中动作",
+            "watch_conditions": ["观察条件1", "观察条件2"],
+            "next_check_time": "下一次检查点或市场本地时间",
+            "confidence_reason": "置信度理由，说明阶段和数据质量限制",
+            "data_limitations": ["阶段或数据质量限制1", "阶段或数据质量限制2"]
         }
     },
 
@@ -1596,7 +1872,9 @@ class GeminiAnalyzer:
 - 操作建议必须同时参考价格位置（支撑/压力位）、量能/筹码、主力资金流向和风险事件。
 - 股价位于支撑与压力之间、资金流不明确时，优先输出“持有/震荡/观望/洗盘观察”等可执行的中性建议；`decision_type` 仍保持 `hold`。
 - 只有在接近支撑确认或有效突破压力，且资金流/量价配合时，才能给出买入；接近压力且资金流出时不得追买。
-- 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。"""
+- 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
+- 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
+- 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。"""
 
     SYSTEM_PROMPT = """你是一位{market_placeholder}投资分析师，负责生成专业的【决策仪表盘】分析报告。
 
@@ -1687,6 +1965,16 @@ class GeminiAnalyzer:
                 "✅/⚠️/❌ 检查项5：仓位与止损计划明确",
                 "✅/⚠️/❌ 检查项6：估值/业绩/催化与结论匹配"
             ]
+        },
+
+        "phase_decision": {
+            "phase_context": {"phase": "premarket/intraday/lunch_break/closing_auction/postmarket/non_trading/unknown"},
+            "action_window": "盘前计划/盘中跟踪/午间确认/收盘前风控/盘后复盘/非交易日观察",
+            "immediate_action": "立即行动/等待确认/观察/止损止盈预警/禁止追高/无盘中动作",
+            "watch_conditions": ["观察条件1", "观察条件2"],
+            "next_check_time": "下一次检查点或市场本地时间",
+            "confidence_reason": "置信度理由，说明阶段和数据质量限制",
+            "data_limitations": ["阶段或数据质量限制1", "阶段或数据质量限制2"]
         }
     },
 
@@ -1751,7 +2039,9 @@ class GeminiAnalyzer:
 - 操作建议必须同时参考价格位置（支撑/压力位）、量能/筹码、主力资金流向和风险事件。
 - 股价位于支撑与压力之间、资金流不明确时，优先输出“持有/震荡/观望/洗盘观察”等可执行的中性建议；`decision_type` 仍保持 `hold`。
 - 只有在接近支撑确认或有效突破压力，且资金流/量价配合时，才能给出买入；接近压力且资金流出时不得追买。
-- 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。"""
+- 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
+- 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
+- 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。"""
 
     TEXT_SYSTEM_PROMPT = """你是一位专业的股票分析助手。
 
@@ -1782,6 +2072,7 @@ class GeminiAnalyzer:
         self._use_legacy_default_prompt_override = use_legacy_default_prompt
         self._resolved_prompt_state: Optional[Dict[str, Any]] = None
         self._router = None
+        self._legacy_router_model_list: List[Dict[str, Any]] = []
         self._litellm_available = False
         self._init_litellm()
         if not self._litellm_available:
@@ -1880,6 +2171,47 @@ class GeminiAnalyzer:
             e.get('model_name', '').startswith('__legacy_') for e in config.llm_model_list
         )
 
+    @staticmethod
+    def _legacy_router_provider_alias(model: str) -> str:
+        provider = model.split("/", 1)[0] if "/" in model else "openai"
+        return f"__legacy_{provider}__"
+
+    @staticmethod
+    def _build_legacy_router_model_list_from_config(
+        model: str,
+        model_list: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Build legacy-router candidates from configured legacy llm_model_list entries."""
+        if not model:
+            return []
+        target_model = model
+        target_legacy_alias = GeminiAnalyzer._legacy_router_provider_alias(model)
+        legacy_entries: List[Dict[str, Any]] = []
+        for entry in model_list or []:
+            if not isinstance(entry, dict):
+                continue
+            model_name = str(entry.get("model_name") or "").strip()
+            if model_name != target_legacy_alias:
+                continue
+
+            params = entry.get("litellm_params")
+            if not isinstance(params, dict):
+                continue
+
+            api_key = str(params.get("api_key") or "").strip()
+            if not api_key or len(api_key) < 8:
+                continue
+
+            deployed_params = dict(params)
+            deployed_params["model"] = target_model
+            deployed_params["api_key"] = api_key
+            legacy_entries.append({
+                "model_name": target_model,
+                "litellm_params": deployed_params,
+            })
+
+        return legacy_entries
+
     def _init_litellm(self) -> None:
         """Initialize litellm Router from channels / YAML / legacy keys."""
         config = self._get_runtime_config()
@@ -1893,27 +2225,34 @@ class GeminiAnalyzer:
         # --- Channel / YAML path: build Router from pre-built model_list ---
         if self._has_channel_config(config):
             model_list = config.llm_model_list
-            self._router = Router(
-                model_list=model_list,
-                routing_strategy="simple-shuffle",
-                num_retries=2,
-            )
-            unique_models = list(dict.fromkeys(
-                e['litellm_params']['model'] for e in model_list
-            ))
-            logger.info(
-                f"Analyzer LLM: Router initialized from channels/YAML — "
-                f"{len(model_list)} deployment(s), models: {unique_models}"
-            )
-            return
+            try:
+                self._router = Router(
+                    model_list=model_list,
+                    routing_strategy="simple-shuffle",
+                    num_retries=2,
+                )
+            except TypeError:
+                logger.debug("Analyzer LLM: Router constructor signature not compatible; fallback to direct mode")
+                self._router = None
+            else:
+                unique_models = list(dict.fromkeys(
+                    e['litellm_params']['model'] for e in model_list
+                ))
+                logger.info(
+                    f"Analyzer LLM: Router initialized from channels/YAML — "
+                    f"{len(model_list)} deployment(s), models: {unique_models}"
+                )
+                return
 
         # --- Legacy path: build Router for multi-key, or use single key ---
         keys = get_api_keys_for_model(litellm_model, config)
-
-        if len(keys) > 1:
-            # Build legacy Router for primary model multi-key load-balancing
+        legacy_model_list = self._build_legacy_router_model_list_from_config(
+            litellm_model,
+            config.llm_model_list,
+        )
+        if len(legacy_model_list) <= 1 and keys:
             extra_params = extra_litellm_params(litellm_model, config)
-            legacy_model_list = [
+            configured_model_list = [
                 {
                     "model_name": litellm_model,
                     "litellm_params": {
@@ -1924,119 +2263,36 @@ class GeminiAnalyzer:
                 }
                 for k in keys
             ]
-            self._router = Router(
-                model_list=legacy_model_list,
-                routing_strategy="simple-shuffle",
-                num_retries=2,
-            )
-            logger.info(
-                f"Analyzer LLM: Legacy Router initialized with {len(keys)} keys "
-                f"for {litellm_model}"
-            )
-        elif keys:
+            if not legacy_model_list:
+                legacy_model_list = configured_model_list
+            elif len(legacy_model_list) < len(configured_model_list):
+                legacy_model_list = configured_model_list
+
+        if len(legacy_model_list) > 1:
+            self._legacy_router_model_list = legacy_model_list
+            try:
+                self._router = Router(
+                    model_list=legacy_model_list,
+                    routing_strategy="simple-shuffle",
+                    num_retries=2,
+                )
+            except TypeError:
+                logger.debug("Analyzer LLM: Legacy Router constructor signature not compatible; using legacy model_list fallback")
+                self._router = None
+            else:
+                logger.info(
+                    f"Analyzer LLM: Legacy Router initialized with {len(legacy_model_list)} keys "
+                    f"for {litellm_model}"
+                )
+                return
+
+        if keys:
             logger.info(f"Analyzer LLM: litellm initialized (model={litellm_model})")
         else:
             logger.info(
                 f"Analyzer LLM: litellm initialized (model={litellm_model}, "
                 f"API key from environment)"
             )
-
-    async def _call_expert_async(self, expert_id: str, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
-        """
-        通过 LiteLLM API 异步调用专家节点。
-        输出契约：{"signal", "confidence", "reasoning"}
-        """
-        import litellm
-        import asyncio
-
-        config = self._get_runtime_config()
-        # ensemble/ 前缀之后的部分是真实模型名，或者使用主模型
-        model_name = config.litellm_model or "gemini/gemini-2.0-flash"
-        if model_name.startswith("ensemble/"):
-            model_name = model_name[len("ensemble/"):]
-            # 补全 provider 前缀（若不含 /）
-            if "/" not in model_name:
-                model_name = f"gemini/{model_name}"
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt + "\n\nOutput JSON ONLY. No markdown fences."},
-        ]
-
-        try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: litellm.completion(model=model_name, messages=messages, temperature=0.3),
-            )
-            raw = response.choices[0].message.content.strip()
-            if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0].strip()
-            return json.loads(raw)
-        except Exception as e:
-            logger.error(f"[Ensemble][LiteLLM] Failed for {expert_id}: {e}")
-            return {"signal": "neutral", "confidence": 0, "reasoning": f"LiteLLM Error: {str(e)[:80]}"}
-
-    async def _analyze_ensemble(self, context: Dict[str, Any], news_context: Optional[str] = None) -> Dict[str, Any]:
-        """
-        核心『大师委员会』并发执行逻辑。
-        """
-        code = context.get('code', 'Unknown')
-        name = context.get('stock_name', f"股票{code}")
-        
-        # 1. 准备技术指标与新闻上下文
-        technical_data = {
-            "current_price": context.get('today', {}).get('close', 'N/A'),
-            "trend_summary": context.get('ma_status', 'N/A'),
-            "technical_indicators": f"MACD/RSI: {context.get('trend_analysis', {}).get('trend_status', 'N/A')}"
-        }
-        # 提取新闻列表
-        news_list = []
-        if news_context:
-            # 简单切割新闻（此处可进一步优化为结构化解析）
-            news_list = [{"date": "", "title": line.strip()} for line in news_context.split("\n") if line.strip()][:5]
-
-        # 2. 初始化专家委员会
-        experts = [
-            WarrenBuffettExpert(),
-            LiLuExpert(),
-            PaulTudorJonesExpert(),
-            JensenHuangExpert(),
-            NassimTalebExpert()
-        ]
-        
-        # 3. 获取动态权重
-        tracker = PerformanceTracker()
-        weights = tracker.get_analyst_weights()
-        logger.info(f"[Ensemble] 启动并发分析 {name}({code})，当前权重: {weights}")
-        
-        # 4. 并发运行专家节点
-        tasks = []
-        for e in experts:
-            user_prompt = e.prepare_prompt(name, technical_data, news_list)
-            tasks.append(self._call_expert_async(e.get_expert_id(), e.SYSTEM_PROMPT, user_prompt))
-        
-        try:
-            expert_results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=120)
-        except asyncio.TimeoutError:
-            logger.error(f"[Ensemble] 专家委员会分析超时（120s），{name}({code})")
-            raise RuntimeError(f"Ensemble analysis timed out for {code}")
-        expert_reports = {experts[i].get_expert_id(): expert_results[i] for i in range(len(experts))}
-        
-        # 5. 记录战绩埋点 (供阶段四结算)
-        for eid, rep in expert_reports.items():
-            tracker.record_prediction(eid, code, rep.get('signal'), rep.get('confidence', 50))
-
-        # 6. 达里奥共识聚合
-        aggregator = RayDalioAggregator()
-        consensus_prompt = aggregator.prepare_consensus_prompt(name, expert_reports, weights)
-        final_consensus = await self._call_expert_async(aggregator.get_expert_id(), aggregator.SYSTEM_PROMPT, consensus_prompt)
-        
-        # 7. 注入专家报告详情到 metadata，以便 WebUI 渲染
-        final_consensus["expert_reports"] = expert_reports
-        return final_consensus
 
     def is_available(self) -> bool:
         """Check if LiteLLM is properly configured with at least one API key."""
@@ -2052,6 +2308,8 @@ class GeminiAnalyzer:
         router_model_names: set[str],
     ) -> Any:
         """Dispatch a LiteLLM completion through router or direct fallback."""
+        wire_models = resolve_fallback_litellm_wire_models(model, config.llm_model_list)
+        register_fallback_model_pricing(wire_models)
         effective_kwargs = dict(call_kwargs)
         if use_channel_router and self._router and model in router_model_names:
             return self._router.completion(**effective_kwargs)
@@ -2064,21 +2322,82 @@ class GeminiAnalyzer:
         effective_kwargs.update(extra_litellm_params(model, config))
         return litellm.completion(**effective_kwargs)
 
-    def _normalize_usage(self, usage_obj: Any) -> Dict[str, Any]:
+    def _normalize_usage(
+        self,
+        usage_obj: Any,
+        *,
+        model: str = "",
+        provider: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         """Normalize usage objects from LiteLLM responses/chunks."""
         if not usage_obj:
-            return {}
+            return attach_message_hmacs({}, messages) if messages is not None else {}
+        usage = normalize_litellm_usage(usage_obj, model=model, provider=provider)
+        if messages is not None:
+            usage = attach_message_hmacs(usage, messages)
+        return usage
 
-        def _get_value(key: str) -> int:
-            if isinstance(usage_obj, dict):
-                return int(usage_obj.get(key) or 0)
-            return int(getattr(usage_obj, key, 0) or 0)
+    @staticmethod
+    def _get_response_field(obj: Any, key: str) -> Any:
+        """Read a field from dict-like or object-like LiteLLM payloads."""
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
 
-        return {
-            "prompt_tokens": _get_value("prompt_tokens"),
-            "completion_tokens": _get_value("completion_tokens"),
-            "total_tokens": _get_value("total_tokens"),
-        }
+    def _extract_text_blocks(self, blocks: Any) -> str:
+        """Extract text from OpenAI-compatible content block lists."""
+        if not blocks:
+            return ""
+
+        parts: List[str] = []
+        for block in blocks:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+
+            text = None
+            if isinstance(block, dict):
+                text = block.get("text")
+                if text is None:
+                    text = block.get("content")
+            else:
+                text = getattr(block, "text", None)
+                if text is None:
+                    text = getattr(block, "content", None)
+
+            if isinstance(text, str) and text:
+                parts.append(text)
+
+        return "".join(parts).strip()
+
+    def _extract_completion_text(self, response: Any) -> str:
+        """Extract text from non-stream LiteLLM completion responses."""
+        choices = self._get_response_field(response, "choices")
+        if not choices:
+            return ""
+
+        choice = choices[0]
+        message = self._get_response_field(choice, "message")
+
+        content_blocks = self._get_response_field(choice, "content_blocks")
+        if content_blocks is None and message is not None:
+            content_blocks = self._get_response_field(message, "content_blocks")
+        block_text = self._extract_text_blocks(content_blocks)
+        if block_text:
+            return block_text
+
+        content = None
+        if message is not None:
+            content = self._get_response_field(message, "content")
+        if content is None:
+            content = self._get_response_field(choice, "content")
+
+        if isinstance(content, list):
+            return self._extract_text_blocks(content)
+        if isinstance(content, str):
+            return content.strip()
+        return str(content).strip() if content is not None else ""
 
     def _extract_stream_text(self, chunk: Any) -> str:
         """Extract provider-agnostic text delta from a LiteLLM streaming chunk."""
@@ -2122,6 +2441,8 @@ class GeminiAnalyzer:
         stream_response: Any,
         *,
         model: str,
+        usage_model: Optional[str] = None,
+        provider: Optional[str] = None,
         progress_callback: Optional[Callable[[int], None]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Consume a LiteLLM stream into a single text payload."""
@@ -2132,8 +2453,12 @@ class GeminiAnalyzer:
 
         try:
             for chunk in stream_response:
-                chunk_usage = chunk.get("usage") if isinstance(chunk, dict) else getattr(chunk, "usage", None)
-                normalized_usage = self._normalize_usage(chunk_usage)
+                chunk_usage = extract_usage_payload(chunk)
+                normalized_usage = self._normalize_usage(
+                    chunk_usage,
+                    model=usage_model or model,
+                    provider=provider,
+                )
                 if normalized_usage:
                     usage = normalized_usage
 
@@ -2214,7 +2539,12 @@ class GeminiAnalyzer:
         effective_system_prompt = system_prompt or self.TEXT_SYSTEM_PROMPT
         router_model_names = set(get_configured_llm_models(config.llm_model_list))
         for model in models_to_try:
-            # --- LiteLLM 路径 ---
+            recovery_model_list = config.llm_model_list
+            legacy_router_model_list = getattr(self, "_legacy_router_model_list", None) or []
+            if legacy_router_model_list and model == config.litellm_model and not use_channel_router:
+                recovery_model_list = legacy_router_model_list
+            usage_model, usage_provider = resolved_model_provider_identity(model, recovery_model_list)
+
             try:
                 model_short = model.split("/")[-1] if "/" in model else model
                 extra = get_thinking_extra_body(model_short)
@@ -2224,32 +2554,56 @@ class GeminiAnalyzer:
                         {"role": "system", "content": effective_system_prompt},
                         {"role": "user", "content": prompt},
                     ],
-                    "temperature": normalize_litellm_temperature(
-                        model,
-                        requested_temperature,
-                        model_list=config.llm_model_list,
-                        request_overrides={"extra_body": extra} if extra else None,
-                    ),
                     "max_tokens": max_tokens,
                 }
                 if extra:
                     call_kwargs["extra_body"] = extra
+                uses_router = (
+                    (use_channel_router and self._router and model in router_model_names)
+                    or (self._router and model == config.litellm_model and not use_channel_router)
+                )
+                if not uses_router:
+                    try:
+                        keys = get_api_keys_for_model(model, config)
+                    except AttributeError:
+                        keys = []
+                    if keys:
+                        call_kwargs["api_key"] = keys[0]
+                    try:
+                        call_kwargs.update(extra_litellm_params(model, config))
+                    except AttributeError:
+                        pass
+                call_kwargs = apply_litellm_generation_params(
+                    call_kwargs,
+                    model,
+                    requested_temperature,
+                    model_list=recovery_model_list,
+                )
 
                 _stream_text: Optional[str] = None
                 _stream_usage: Dict[str, Any] = {}
 
                 if stream:
                     try:
-                        stream_response = self._dispatch_litellm_completion(
-                            model,
-                            {**call_kwargs, "stream": True},
-                            config=config,
-                            use_channel_router=use_channel_router,
-                            router_model_names=router_model_names,
+                        stream_response = call_litellm_with_param_recovery(
+                            lambda kwargs: self._dispatch_litellm_completion(
+                                model,
+                                kwargs,
+                                config=config,
+                                use_channel_router=use_channel_router,
+                                router_model_names=router_model_names,
+                            ),
+                            model=model,
+                            call_kwargs={**call_kwargs, "stream": True},
+                            model_list=recovery_model_list,
+                            cache_recovery=False,
+                            logger=logger,
                         )
                         _stream_text, _stream_usage = self._consume_litellm_stream(
                             stream_response,
                             model=model,
+                            usage_model=usage_model,
+                            provider=usage_provider,
                             progress_callback=stream_progress_callback,
                         )
                     except _LiteLLMStreamError as exc:
@@ -2276,22 +2630,34 @@ class GeminiAnalyzer:
                 if _stream_text is not None:
                     last_response_text = _stream_text
                     last_model = model
+                    _stream_usage = attach_message_hmacs(_stream_usage, call_kwargs["messages"])
                     last_usage = _stream_usage
                     if response_validator is not None:
                         response_validator(_stream_text)
                     return _stream_text, model, _stream_usage
 
-                response = self._dispatch_litellm_completion(
-                    model,
-                    call_kwargs,
-                    config=config,
-                    use_channel_router=use_channel_router,
-                    router_model_names=router_model_names,
+                response = call_litellm_with_param_recovery(
+                    lambda kwargs: self._dispatch_litellm_completion(
+                        model,
+                        kwargs,
+                        config=config,
+                        use_channel_router=use_channel_router,
+                        router_model_names=router_model_names,
+                    ),
+                    model=model,
+                    call_kwargs=call_kwargs,
+                    model_list=recovery_model_list,
+                    logger=logger,
                 )
 
-                if response and response.choices and response.choices[0].message.content:
-                    content = response.choices[0].message.content
-                    usage = self._normalize_usage(getattr(response, "usage", None))
+                content = self._extract_completion_text(response)
+                if content:
+                    usage = self._normalize_usage(
+                        extract_usage_payload(response),
+                        model=usage_model or model,
+                        provider=usage_provider,
+                        messages=call_kwargs["messages"],
+                    )
                     last_response_text = content
                     last_model = model
                     last_usage = usage
@@ -2347,12 +2713,12 @@ class GeminiAnalyzer:
             return None
 
     def analyze(
-        self,
+        self, 
         context: Dict[str, Any],
         news_context: Optional[str] = None,
         progress_callback: Optional[Callable[[int, str], None]] = None,
         stream_progress_callback: Optional[Callable[[int], None]] = None,
-        analysis_mode: Optional[str] = None,
+        analysis_context_pack_summary: Optional[str] = None,
     ) -> AnalysisResult:
         """
         分析单只股票
@@ -2400,11 +2766,6 @@ class GeminiAnalyzer:
                 # 最后从映射表获取
                 name = STOCK_NAME_MAP.get(code, f'股票{code}')
         
-        config = self._get_runtime_config()
-        model_name = config.litellm_model or "unknown"
-        report_language = normalize_report_language(getattr(config, "report_language", "zh"))
-        system_prompt = self._get_analysis_system_prompt(report_language, stock_code=code)
-        
         # 如果模型不可用，返回默认结果
         if not self.is_available():
             return AnalysisResult(
@@ -2423,24 +2784,14 @@ class GeminiAnalyzer:
             )
         
         try:
-            # ========== Ensemble 专家模式路由 ==========
-            if model_name.startswith("ensemble/") or analysis_mode == "ensemble":
-                logger.info(f"[Ensemble] 检测到专家委员会路由: {model_name}")
-                # 调用异步 Ensemble 逻辑
-                try:
-                    ensemble_data = asyncio.run(self._analyze_ensemble(context, news_context))
-                    # 将达里奥的 JSON 映射回 AnalysisResult
-                    result = self._map_ensemble_to_result(ensemble_data, code, name, report_language)
-                    result.search_performed = bool(news_context)
-                    result.model_used = model_name
-                    result.market_snapshot = self._build_market_snapshot(context)
-                    return result
-                except Exception as e:
-                    logger.error(f"[Ensemble] 专家分析链条故障: {e}")
-                    # 故障回退到普通 LLM 或抛出错误
-
             # 格式化输入（包含技术面数据和新闻）
-            prompt = self._format_prompt(context, name, news_context, report_language=report_language)
+            prompt = self._format_prompt(
+                context,
+                name,
+                news_context,
+                report_language=report_language,
+                analysis_context_pack_summary=analysis_context_pack_summary,
+            )
             
             config = self._get_runtime_config()
             model_name = config.litellm_model or "unknown"
@@ -2513,11 +2864,16 @@ class GeminiAnalyzer:
                 result.market_snapshot = self._build_market_snapshot(context)
                 result.model_used = model_used
                 result.report_language = report_language
+                normalize_chip_structure_availability(result, context.get("chip"))
 
                 # 内容完整性校验（可选）
                 if not config.report_integrity_enabled:
                     break
-                pass_integrity, missing_fields = self._check_content_integrity(result)
+                require_phase_decision = isinstance(context.get("market_phase_context"), dict)
+                pass_integrity, missing_fields = self._check_content_integrity(
+                    result,
+                    require_phase_decision=require_phase_decision,
+                )
                 if pass_integrity:
                     break
                 if retry_count < max_retries:
@@ -2575,6 +2931,7 @@ class GeminiAnalyzer:
         name: str,
         news_context: Optional[str] = None,
         report_language: str = "zh",
+        analysis_context_pack_summary: Optional[str] = None,
     ) -> str:
         """
         格式化分析提示词（决策仪表盘 v2.0）
@@ -2598,6 +2955,31 @@ class GeminiAnalyzer:
         today = context.get('today', {})
         unknown_text = get_unknown_text(report_language)
         no_data_text = get_no_data_text(report_language)
+        quote_section_title, close_price_label = _phase_aware_quote_labels(context)
+        hide_regular_session_ohlc = _should_hide_regular_session_ohlc(context)
+        realtime_overlay_quote = hide_regular_session_ohlc and _today_has_realtime_overlay(today)
+        pct_chg_label = "实时涨跌幅" if realtime_overlay_quote else "涨跌幅"
+        volume_label = "实时成交量" if realtime_overlay_quote else "成交量"
+        amount_label = "实时成交额" if realtime_overlay_quote else "成交额"
+        quote_rows = [
+            f"| {close_price_label} | {today.get('close', 'N/A')} 元 |",
+        ]
+        if not hide_regular_session_ohlc:
+            quote_rows.extend(
+                [
+                    f"| 开盘价 | {today.get('open', 'N/A')} 元 |",
+                    f"| 最高价 | {today.get('high', 'N/A')} 元 |",
+                    f"| 最低价 | {today.get('low', 'N/A')} 元 |",
+                ]
+            )
+        quote_rows.extend(
+            [
+                f"| {pct_chg_label} | {today.get('pct_chg', 'N/A')}% |",
+                f"| {volume_label} | {self._format_volume(today.get('volume'))} |",
+                f"| {amount_label} | {self._format_amount(today.get('amount'))} |",
+            ]
+        )
+        quote_rows_text = "\n".join(quote_rows)
         
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
@@ -2610,19 +2992,27 @@ class GeminiAnalyzer:
 | 分析日期 | {context.get('date', unknown_text)} |
 
 ---
+"""
+        prompt += format_market_phase_prompt_section(
+            context.get("market_phase_context"),
+            report_language=report_language,
+        )
+        daily_market_context_section = format_daily_market_context_prompt_section(
+            context.get("daily_market_context"),
+            report_language=report_language,
+        )
+        if daily_market_context_section:
+            prompt += daily_market_context_section
+        if isinstance(analysis_context_pack_summary, str) and analysis_context_pack_summary:
+            prompt += analysis_context_pack_summary
+        prompt += f"""
 
 ## 📈 技术面数据
 
-### 今日行情
+### {quote_section_title}
 | 指标 | 数值 |
 |------|------|
-| 收盘价 | {today.get('close', 'N/A')} 元 |
-| 开盘价 | {today.get('open', 'N/A')} 元 |
-| 最高价 | {today.get('high', 'N/A')} 元 |
-| 最低价 | {today.get('low', 'N/A')} 元 |
-| 涨跌幅 | {today.get('pct_chg', 'N/A')}% |
-| 成交量 | {self._format_volume(today.get('volume'))} |
-| 成交额 | {self._format_amount(today.get('amount'))} |
+{quote_rows_text}
 
 ### 均线系统（关键判断指标）
 | 均线 | 数值 | 说明 |
@@ -2761,6 +3151,19 @@ class GeminiAnalyzer:
 | 90%筹码集中度 | {chip.get('concentration_90', 0):.2%} | <15%为集中 |
 | 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | |
 | 筹码状态 | {chip.get('chip_status', unknown_text)} | |
+"""
+        else:
+            chip_unavailable_text = get_chip_unavailable_text(report_language)
+            chip_instruction = (
+                "Do not fabricate profit ratio, average cost, or concentration. Mention chip data "
+                "unavailability only once in the report; do not repeat per-field no-data text in `chip_structure`."
+                if report_language == "en"
+                else "请勿编造获利比例、平均成本或集中度；报告中只说明一次筹码数据不可用，不要把“数据缺失，无法判断”逐字段重复写入 `chip_structure`。"
+            )
+            prompt += f"""
+### 筹码分布数据（效率指标）
+> {chip_unavailable_text}
+> {chip_instruction}
 """
         
         # 添加趋势分析结果（仅隐式内建 bull_trend 默认回退保留旧口径）
@@ -3062,9 +3465,14 @@ class GeminiAnalyzer:
 
         return snapshot
 
-    def _check_content_integrity(self, result: AnalysisResult) -> Tuple[bool, List[str]]:
+    def _check_content_integrity(
+        self,
+        result: AnalysisResult,
+        *,
+        require_phase_decision: bool = False,
+    ) -> Tuple[bool, List[str]]:
         """Delegate to module-level check_content_integrity."""
-        return check_content_integrity(result)
+        return check_content_integrity(result, require_phase_decision=require_phase_decision)
 
     def _build_integrity_complement_prompt(self, missing_fields: List[str], report_language: str = "zh") -> str:
         """Build complement instruction for missing mandatory fields."""
@@ -3084,6 +3492,20 @@ class GeminiAnalyzer:
                     lines.append("- dashboard.intelligence.risk_alerts: risk alert list (can be empty)")
                 elif f == "dashboard.battle_plan.sniper_points.stop_loss":
                     lines.append("- dashboard.battle_plan.sniper_points.stop_loss: stop-loss level")
+                elif f == "dashboard.phase_decision.phase_context":
+                    lines.append("- dashboard.phase_decision.phase_context: public market phase summary subset")
+                elif f == "dashboard.phase_decision.action_window":
+                    lines.append("- dashboard.phase_decision.action_window: phase-aware action window")
+                elif f == "dashboard.phase_decision.immediate_action":
+                    lines.append("- dashboard.phase_decision.immediate_action: act now / wait / watch / no intraday action")
+                elif f == "dashboard.phase_decision.watch_conditions":
+                    lines.append("- dashboard.phase_decision.watch_conditions: list of watch conditions")
+                elif f == "dashboard.phase_decision.next_check_time":
+                    lines.append("- dashboard.phase_decision.next_check_time: next check point or market-local time")
+                elif f == "dashboard.phase_decision.confidence_reason":
+                    lines.append("- dashboard.phase_decision.confidence_reason: confidence rationale and data limits")
+                elif f == "dashboard.phase_decision.data_limitations":
+                    lines.append("- dashboard.phase_decision.data_limitations: list of phase/data quality limitations")
             return "\n".join(lines)
 
         lines = ["### 补全要求：请在上方分析基础上补充以下必填内容，并输出完整 JSON："]
@@ -3100,6 +3522,20 @@ class GeminiAnalyzer:
                 lines.append("- dashboard.intelligence.risk_alerts: 风险警报列表（可为空数组）")
             elif f == "dashboard.battle_plan.sniper_points.stop_loss":
                 lines.append("- dashboard.battle_plan.sniper_points.stop_loss: 止损价")
+            elif f == "dashboard.phase_decision.phase_context":
+                lines.append("- dashboard.phase_decision.phase_context: 公开低敏市场阶段摘要子集")
+            elif f == "dashboard.phase_decision.action_window":
+                lines.append("- dashboard.phase_decision.action_window: 阶段化行动窗口")
+            elif f == "dashboard.phase_decision.immediate_action":
+                lines.append("- dashboard.phase_decision.immediate_action: 立即行动/等待确认/观察/无盘中动作")
+            elif f == "dashboard.phase_decision.watch_conditions":
+                lines.append("- dashboard.phase_decision.watch_conditions: 观察条件数组")
+            elif f == "dashboard.phase_decision.next_check_time":
+                lines.append("- dashboard.phase_decision.next_check_time: 下一次检查点或市场本地时间")
+            elif f == "dashboard.phase_decision.confidence_reason":
+                lines.append("- dashboard.phase_decision.confidence_reason: 置信度理由与数据限制")
+            elif f == "dashboard.phase_decision.data_limitations":
+                lines.append("- dashboard.phase_decision.data_limitations: 阶段/数据质量限制数组")
         return "\n".join(lines)
 
     def _build_integrity_retry_prompt(
@@ -3126,51 +3562,6 @@ class GeminiAnalyzer:
     def _apply_placeholder_fill(self, result: AnalysisResult, missing_fields: List[str]) -> None:
         """Delegate to module-level apply_placeholder_fill."""
         apply_placeholder_fill(result, missing_fields)
-
-    def _map_ensemble_to_result(self, data: Dict[str, Any], code: str, name: str, report_language: str) -> AnalysisResult:
-        """
-        将专家委员会的聚合 JSON 转换为 AnalysisResult 结构。
-        """
-        rating_map = {
-            "Strong Buy": {"score": 90, "advice": "买入", "type": "buy"},
-            "Buy": {"score": 75, "advice": "加仓", "type": "buy"},
-            "Hold": {"score": 50, "advice": "观望", "type": "hold"},
-            "Sell": {"score": 25, "advice": "减仓", "type": "sell"},
-            "Strong Sell": {"score": 10, "advice": "卖出", "type": "sell"}
-        }
-        
-        rating = data.get("final_rating", "Hold")
-        mapped = rating_map.get(rating, rating_map["Hold"])
-        
-        # 构造仪表盘结构（适配 WebUI）
-        dashboard = {
-            "core_conclusion": {
-                "one_sentence": data.get("action_plan", "委员会建议观望"),
-                "signal_type": "🟢买入" if "Buy" in rating else "🔴卖出" if "Sell" in rating else "🟡观望",
-                "time_sensitivity": "今日内"
-            },
-            "intelligence": {
-                "sentiment_summary": data.get("consensus_summary", ""),
-                "risk_alerts": [data.get("divergence_analysis", "专家意见存在分歧")]
-            },
-            # 专家报告透传（用于前端扩展展示）
-            "ensemble_reports": data.get("expert_reports", {})
-        }
-        
-        return AnalysisResult(
-            code=code,
-            name=name,
-            sentiment_score=mapped["score"],
-            trend_prediction=rating,
-            operation_advice=mapped["advice"],
-            decision_type=mapped["type"],
-            confidence_level="高",
-            report_language=report_language,
-            dashboard=dashboard,
-            analysis_summary=data.get("consensus_summary", ""),
-            risk_warning=data.get("divergence_analysis", ""),
-            success=True
-        )
 
     def _parse_response(
         self, 
@@ -3231,7 +3622,11 @@ class GeminiAnalyzer:
                     op = data.get('operation_advice', 'Hold' if report_language == "en" else '持有')
                     decision_type = infer_decision_type_from_advice(op, default='hold')
                 
-                return AnalysisResult(
+                explicit_action = data.get("action")
+                if explicit_action is None and isinstance(dashboard, dict):
+                    explicit_action = dashboard.get("action")
+
+                result = AnalysisResult(
                     code=code,
                     name=name,
                     # 核心指标
@@ -3273,6 +3668,7 @@ class GeminiAnalyzer:
                     data_sources=data.get('data_sources', 'Technical data' if report_language == "en" else '技术面数据'),
                     success=True,
                 )
+                return populate_decision_action_fields(result, explicit_action=explicit_action)
             else:
                 # 没有找到 JSON，标记为失败
                 logger.warning(f"无法从响应中提取 JSON，标记为解析失败")
@@ -3370,7 +3766,7 @@ class GeminiAnalyzer:
         # 截取前500字符作为摘要
         summary = response_text[:500] if response_text else ('No analysis result' if report_language == "en" else '无分析结果')
         
-        return AnalysisResult(
+        result = AnalysisResult(
             code=code,
             name=name,
             sentiment_score=sentiment_score,
@@ -3386,6 +3782,7 @@ class GeminiAnalyzer:
             error_message='LLM response is not valid JSON; analysis result will not be persisted',
             report_language=report_language,
         )
+        return populate_decision_action_fields(result)
     
     def batch_analyze(
         self, 

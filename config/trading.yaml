@@ -1,0 +1,55 @@
+# TQQQ 自动交易机器人配置
+#
+# 基于回测最优结果更新 (2026-05-14):
+# 回测周期: 2021-03 ~ 2026-05 (5年, 1296交易日)
+# 最优参数: 买4%/止盈4%/止损3%, 300股
+# 净年化: +151.70% | 夏普: 3.85 | 胜率: 73.2%
+# 注意: 当前为模拟盘(PAPER), auto_trade=false
+
+tiger:
+  config_path: "tiger_openapi_config.properties"
+  environment: "PAPER"
+
+trading:
+  symbol: "TQQQ"
+  market: "US"
+  auto_trade: false
+  entry:
+    # 百分比模式: 触发价 = 开盘价 * (1 - trigger_percentage)，日间动态计算
+    trigger_percentage: 0.02  # 开盘下浮 2% 买入
+    trigger_price: 74.61      # 兜底固定价（缺少开盘价时使用）
+    quantity: 60
+    order_type: "LMT"
+    time_in_force: "GTC"
+  take_profit:
+    percentage: 0.02         # 止盈 2%（之前是4%）
+    order_type: "LMT"
+    time_in_force: "GTC"
+  stop_loss:
+    percentage: 0.05         # 止损 5%（之前是3%）
+    order_type: "STP_LMT"
+    limit_offset: 0.005
+    time_in_force: "GTC"
+
+
+bot:
+  cooldown_seconds: 300
+  pre_market: true
+  post_market: true
+  poll_interval: 30
+  signal_cooldown: 60
+
+notification:
+  enabled: true
+  platform: "feishu"
+  webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/81ee2f7e-ca2a-49a9-bf0a-3fec970062c5"
+  webhook_secret: ""
+  # 通知抑制策略
+  cooldown_seconds: 300            # 同类通知最小间隔（秒），0=不限制
+  max_notifications_per_signal: 1  # 同类信号最多通知次数，0=不限制
+  reset_hours: 24                  # 通知计数重置周期（小时）
+
+logging:
+  level: "INFO"
+  log_dir: "./logs"
+  data_dir: "./data"

@@ -4,17 +4,23 @@ import type {
   ReportMeta,
   ReportSummary as ReportSummaryType,
 } from '../../types/analysis';
-import { Badge, Card, ScoreGauge } from '../common';
+import { Badge, Button, Card, ScoreGauge } from '../common';
 import { formatDateTime } from '../../utils/format';
+import { getMarketPhaseSummaryLabel, getPartialBarLabel } from '../../utils/marketPhase';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
-import { RadarChart, MasterVotingDisk, ExpertLeaderboard } from './';
-import { Users, ArrowUpCircle, ArrowDownCircle, HelpCircle } from 'lucide-react';
+import { useUiLanguage } from '../../contexts/UiLanguageContext';
 
 interface ReportOverviewProps {
   meta: ReportMeta;
   summary: ReportSummaryType;
   details?: ReportDetailsType;
   isHistory?: boolean;
+  watchlist?: {
+    isInWatchlist: (code: string) => boolean;
+    onToggle: (code: string) => void;
+    isActioning: boolean;
+    actionMessage: string | null;
+  };
 }
 
 type BoardStatus = 'leading' | 'lagging';
@@ -79,12 +85,17 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   meta,
   summary,
   details,
+  watchlist,
 }) => {
+  const { t } = useUiLanguage();
   const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
   const text = getReportText(reportLanguage);
+  const marketPhaseLabel = getMarketPhaseSummaryLabel(meta.marketPhaseSummary, reportLanguage);
+  const partialBarLabel = meta.marketPhaseSummary?.isPartialBar === true
+    ? getPartialBarLabel(reportLanguage)
+    : null;
   const relatedBoards = (Array.isArray(details?.belongBoards) ? details.belongBoards : [])
-    .filter((board) => normalizeBoardName(board?.name).length > 0)
-    .slice(0, 3);
+    .filter((board) => normalizeBoardName(board?.name).length > 0);
   const boardSignals = buildBoardSignalMap(details);
 
   const getPriceChangeStyle = (changePct: number | undefined): React.CSSProperties | undefined => {
@@ -125,8 +136,8 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
 
   return (
     <div className="space-y-5">
-      {/* 主信息区 - 两列布局，items-stretch 确保右侧与左侧同高 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-stretch">
+      {/* 主信息区 - 两列布局 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
         {/* 左侧：股票信息与结论 */}
         <div className="lg:col-span-2 space-y-5">
           {/* 股票头部 */}
@@ -137,13 +148,6 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                   <h2 className="text-[28px] font-bold leading-tight text-foreground">
                     {meta.stockName || meta.stockCode}
                   </h2>
-                  {/* 专家委员会驱动标识 */}
-                  {details?.ensembleReports && Object.keys(details.ensembleReports).length > 0 && (
-                    <Badge variant="info" glow className="bg-indigo-500/10 text-indigo-400 border-indigo-500/30 px-2 py-1 gap-1">
-                      <Users className="w-3 h-3" />
-                      <span className="text-[10px] font-bold tracking-wider">ENSEMBLE</span>
-                    </Badge>
-                  )}
                   {/* 价格和涨跌幅 */}
                   {meta.currentPrice != null && (
                     <div className="flex items-baseline gap-2">
@@ -156,10 +160,20 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-2 mt-1.5">
+                <div className="flex flex-wrap items-center gap-2 mt-1.5">
                   <span className="home-accent-chip px-2 py-0.5 font-mono text-xs">
                     {meta.stockCode}
                   </span>
+                  {marketPhaseLabel ? (
+                    <Badge variant="info" className="shrink-0 gap-1.5 shadow-none" aria-label={marketPhaseLabel}>
+                      {marketPhaseLabel}
+                    </Badge>
+                  ) : null}
+                  {partialBarLabel ? (
+                    <Badge variant="warning" className="shrink-0 shadow-none" aria-label={partialBarLabel}>
+                      {partialBarLabel}
+                    </Badge>
+                  ) : null}
                   <span className="text-xs text-muted-text flex items-center gap-1">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -179,30 +193,80 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
             </div>
           </Card>
 
-          {/* 操作建议和趋势预测 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* 操作建议 */}
-            <Card
-              variant="bordered"
-              padding="sm"
-              hoverable
-              className="home-panel-card home-insight-card"
-              style={{ ['--home-insight-tone' as string]: 'var(--home-strategy-buy)' }}
-            >
-              <div className="flex items-start gap-3">
-                <div className="home-insight-icon w-8 h-8 rounded-lg bg-success/10 flex items-center justify-center flex-shrink-0">
-                  <svg className="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                  </svg>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+            <div className="space-y-4">
+              {/* 操作建议 */}
+              <Card
+                variant="bordered"
+                padding="sm"
+                hoverable
+                className="home-panel-card home-insight-card"
+                style={{ ['--home-insight-tone' as string]: 'var(--home-strategy-buy)' }}
+              >
+                <div className="flex items-start gap-3">
+                  <div className="home-insight-icon w-8 h-8 rounded-lg bg-success/10 flex items-center justify-center flex-shrink-0">
+                    <svg className="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                    </svg>
+                  </div>
+                  <div className="space-y-1.5">
+                    <h4 className="home-insight-title text-[11px] font-medium uppercase tracking-[0.16em]">{text.actionAdvice}</h4>
+                    <p className="home-insight-body text-sm leading-6">
+                      {summary.operationAdvice || text.noAdvice}
+                    </p>
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  <h4 className="home-insight-title text-[11px] font-medium uppercase tracking-[0.16em]">{text.actionAdvice}</h4>
-                  <p className="home-insight-body text-sm leading-6">
-                    {summary.operationAdvice || text.noAdvice}
-                  </p>
-                </div>
-              </div>
-            </Card>
+              </Card>
+
+              {relatedBoards.length > 0 && (
+                <Card variant="bordered" padding="sm" className="home-panel-card text-left">
+                  <section aria-label={text.relatedBoards}>
+                    <div className="mb-3 flex items-baseline gap-2">
+                      <span className="label-uppercase">{text.boardLinkage}</span>
+                      <h3 className="mt-0.5 text-base font-semibold text-foreground">{text.relatedBoards}</h3>
+                    </div>
+
+                    <div className="home-related-board-list flex flex-nowrap items-center gap-2 overflow-x-auto pb-1">
+                      {relatedBoards.map((board, index) => {
+                        const boardName = normalizeBoardName(board.name);
+                        const signal = boardSignals.get(boardName);
+                        return (
+                          <div
+                            key={`${boardName}-${board.code || index}`}
+                            className="inline-flex shrink-0 items-center gap-2 text-sm"
+                          >
+                            <span className="home-accent-chip px-2 py-0.5 text-xs font-medium">
+                              {boardName}
+                            </span>
+                            {board.type && (
+                              <span className="home-board-pill rounded-full px-2 py-0.5 text-xs">
+                                {board.type}
+                              </span>
+                            )}
+                            {signal && (
+                              <Badge
+                                variant={getBoardStatusVariant(signal.status)}
+                                className="home-board-status-badge shadow-none"
+                              >
+                                {getBoardStatusLabel(signal.status)}
+                              </Badge>
+                            )}
+                            {signal && signal.changePct !== undefined && signal.changePct !== null && (
+                              <span
+                                className="text-xs font-mono"
+                                style={getPriceChangeStyle(signal.changePct)}
+                              >
+                                {formatChangePct(signal.changePct)}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                </Card>
+              )}
+            </div>
 
             {/* 趋势预测 */}
             <Card
@@ -227,133 +291,36 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               </div>
             </Card>
           </div>
-
-          {relatedBoards.length > 0 && (
-            <Card variant="bordered" padding="sm" className="home-panel-card text-left">
-              <div className="mb-3 flex items-baseline gap-2">
-                <span className="label-uppercase">{text.boardLinkage}</span>
-                <h3 className="mt-0.5 text-base font-semibold text-foreground">{text.relatedBoards}</h3>
-              </div>
-
-              <div className="space-y-2.5">
-                {relatedBoards.map((board, index) => {
-                  const boardName = normalizeBoardName(board.name);
-                  const signal = boardSignals.get(boardName);
-                  return (
-                    <div
-                      key={`${boardName}-${board.code || index}`}
-                      className="flex flex-wrap items-center gap-2 text-sm"
-                    >
-                      <span className="home-accent-chip px-2 py-0.5 text-xs font-medium">
-                        {boardName}
-                      </span>
-                      {board.type && (
-                        <span className="home-board-pill rounded-full px-2 py-0.5 text-xs">
-                          {board.type}
-                        </span>
-                      )}
-                      {signal && (
-                        <Badge
-                          variant={getBoardStatusVariant(signal.status)}
-                          className="home-board-status-badge shadow-none"
-                        >
-                          {getBoardStatusLabel(signal.status)}
-                        </Badge>
-                      )}
-                      {signal && signal.changePct !== undefined && signal.changePct !== null && (
-                        <span
-                          className="text-xs font-mono"
-                          style={getPriceChangeStyle(signal.changePct)}
-                        >
-                          {formatChangePct(signal.changePct)}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-          )}
-
-          {/* 专家委员会共识推演 - 核心版块 */}
-          {details?.ensembleReports && Object.keys(details.ensembleReports).length > 0 && (
-            <Card variant="bordered" padding="md" className="home-panel-card border-l-4 border-l-indigo-500">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Users className="w-5 h-5 text-indigo-400" />
-                  <span className="label-uppercase">Expert Consensus Detail</span>
-                  <h3 className="mt-0.5 text-base font-semibold text-foreground">专家委员会共识推演</h3>
-                </div>
-              </div>
-              
-              <div className="space-y-4">
-                {Object.entries(details.ensembleReports).map(([id, report]) => {
-                  const analystNames: Record<string, string> = {
-                    warren_buffett: '巴菲特',
-                    li_lu: '李录',
-                    paul_tudor_jones: '保罗·都铎·琼斯',
-                    jensen_huang: '黄仁勋',
-                    nassim_taleb: '塔勒布',
-                    ray_dalio: '雷·达里奥'
-                  };
-                  const signal = report.signal.toLowerCase();
-                  const isBullish = signal.includes('buy') || signal.includes('bullish');
-                  const isBearish = signal.includes('sell') || signal.includes('bearish');
-                  
-                  return (
-                    <div key={id} className="relative pl-5 border-l border-border/60 py-1 group">
-                      <div className="absolute -left-[5px] top-2 w-2.5 h-2.5 rounded-full bg-border group-hover:bg-indigo-500 transition-colors" />
-                      <div className="flex items-baseline justify-between gap-4 mb-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-bold text-foreground">{analystNames[id] || id}</span>
-                          <span className="text-[10px] text-muted-text opacity-70">CONFIDENCE {report.confidence}%</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          {isBullish ? <ArrowUpCircle className="w-3.5 h-3.5 text-success" /> : 
-                           isBearish ? <ArrowDownCircle className="w-3.5 h-3.5 text-danger" /> : 
-                           <HelpCircle className="w-3.5 h-3.5 text-warning" />}
-                          <span className={`text-[11px] font-bold ${isBullish ? 'text-success' : isBearish ? 'text-danger' : 'text-warning'}`}>
-                            {isBullish ? '看多' : isBearish ? '看空' : '中性'}
-                          </span>
-                        </div>
-                      </div>
-                      <p className="text-xs text-secondary-text leading-relaxed">
-                        {report.reasoning}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
-          )}
         </div>
 
-        {/* 右侧：情绪指标与多维度评分 - 填满格子高度 */}
-        <div className="flex flex-col self-stretch min-h-full space-y-5">
-          <Card variant="bordered" padding="md" className="home-panel-card home-rail-card flex flex-col min-h-0">
+        {/* 右侧：情绪指标 / 自选操作 */}
+        <div className="flex flex-col space-y-4">
+          {watchlist && meta.reportType !== 'market_review' && (
+            <Card variant="bordered" padding="sm" className="home-panel-card">
+              <div className="text-center space-y-3">
+                <span className="label-uppercase">{t('report.watchlist')}</span>
+                <div className="text-xs text-muted-text font-mono">{meta.stockCode}</div>
+                <Button
+                  variant={watchlist.isInWatchlist(meta.stockCode) ? 'danger-subtle' : 'secondary'}
+                  size="sm"
+                  isLoading={watchlist.isActioning}
+                  onClick={() => watchlist.onToggle(meta.stockCode)}
+                  className="w-full text-xs"
+                >
+                  {watchlist.isInWatchlist(meta.stockCode) ? t('report.removeFromWatchlist') : t('report.addToWatchlist')}
+                </Button>
+                {watchlist.actionMessage && (
+                  <p className="text-[11px] text-secondary-text animate-in fade-in">{watchlist.actionMessage}</p>
+                )}
+              </div>
+            </Card>
+          )}
+          <Card variant="bordered" padding="md" className="home-panel-card home-rail-card !overflow-visible">
             <div className="text-center">
-              <h3 className="mb-4 text-sm font-medium tracking-wide text-foreground">{text.marketSentiment}</h3>
+              <h3 className="mb-5 text-sm font-medium tracking-wide text-foreground">{text.marketSentiment}</h3>
               <ScoreGauge score={summary.sentimentScore} size="lg" language={reportLanguage} />
             </div>
           </Card>
-
-          {/* 雷达图组件 */}
-          {details?.radarData && (
-            <Card variant="bordered" padding="md" className="home-panel-card flex-1 flex flex-col min-h-0">
-              <h3 className="mb-2 text-sm font-medium tracking-wide text-foreground text-center">多维度评分雷达</h3>
-              <RadarChart data={details.radarData} size={200} />
-            </Card>
-          )}
-
-          {/* 专家共识投票：仅在有集成报告时挂载 */}
-          {details?.ensembleReports && Object.keys(details.ensembleReports).length > 0 && (
-            <MasterVotingDisk reports={details.ensembleReports} />
-          )}
-
-          {/* 专家胜率榜单：仅在有集成报告时展示，避免只读容器触发 DB 请求 */}
-          {details?.ensembleReports && Object.keys(details.ensembleReports).length > 0 && (
-            <ExpertLeaderboard />
-          )}
         </div>
       </div>
     </div>

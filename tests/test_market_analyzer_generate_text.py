@@ -21,6 +21,70 @@ import pytest
 from unittest.mock import PropertyMock
 
 
+@pytest.fixture(autouse=True)
+def _llm_usage_hmac_env(monkeypatch):
+    monkeypatch.setenv("LLM_USAGE_HMAC_SECRET", "test-usage-hmac-secret")
+    monkeypatch.setenv("LLM_USAGE_HMAC_KEY_VERSION", "test-v1")
+
+
+def _assert_usage_contains(usage, expected):
+    for key, value in expected.items():
+        assert usage[key] == value
+    assert usage["normalized_prompt_tokens"] == expected.get("prompt_tokens")
+    assert usage["normalized_completion_tokens"] == expected.get("completion_tokens")
+    assert usage["normalized_total_tokens"] == expected.get("total_tokens")
+    assert usage["provider_usage_json"]
+    assert usage["messages_hmac"] and len(usage["messages_hmac"]) == 64
+    assert usage["hmac_key_version"] == "test-v1"
+
+
+def _assert_no_provider_usage_hmac_only(usage):
+    assert "prompt_tokens" not in usage
+    assert usage["messages_hmac"] and len(usage["messages_hmac"]) == 64
+    assert usage["hmac_key_version"] == "test-v1"
+
+
+_OPENAI_COMPATIBILITY_PAYLOAD_FIXTURES = [
+    # Repro case 1 (Issue #1279): OpenAI-compatible provider message.content is None while text is in content_blocks.
+    (
+        "openai/cpa-compatible",
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "content_blocks": [
+                            {"type": "text", "text": "block "},
+                            {"type": "text", "text": "response"},
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        },
+        "block response",
+    ),
+    # Repro case 2: OpenAI-compatible provider returns message.content as list-of-blocks.
+    (
+        "openai/list-content-provider",
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "list "},
+                            {"type": "text", "text": "response"},
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+        },
+        "list response",
+    ),
+]
+
+
 # ---------------------------------------------------------------------------
 # Analyzer.generate_text()
 # ---------------------------------------------------------------------------
@@ -99,8 +163,183 @@ class TestAnalyzerGenerateText:
 
         assert text == "abcdef"
         assert model == "gemini/gemini-2.0-flash"
-        assert usage == {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+        _assert_usage_contains(usage, {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3})
         assert progress_updates == [3, 6]
+
+    def test_call_litellm_stream_reads_private_hidden_usage_best_effort(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/gpt-4o-mini",
+            litellm_fallback_models=[],
+            llm_model_list=[],
+        )
+
+        def stream_response():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="abc"))],
+                usage=None,
+            )
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=""))],
+                usage=None,
+                _hidden_params={
+                    "usage": SimpleNamespace(prompt_tokens=11, completion_tokens=2, total_tokens=13)
+                },
+            )
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", return_value=stream_response()):
+            text, model, usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+                stream=True,
+            )
+
+        assert text == "abc"
+        assert model == "openai/gpt-4o-mini"
+        _assert_usage_contains(usage, {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13})
+
+    def test_call_litellm_legacy_path_uses_legacy_model_list_for_param_recovery(self):
+        with patch("src.analyzer.get_config") as mock_cfg:
+            cfg = MagicMock()
+            cfg.litellm_model = "openai/gpt-4o-mini"
+            cfg.litellm_fallback_models = []
+            cfg.gemini_api_keys = []
+            cfg.anthropic_api_keys = []
+            cfg.deepseek_api_keys = []
+            cfg.openai_api_keys = ["sk-openai-legacy-a", "sk-openai-legacy-b"]
+            cfg.openai_base_url = None
+            cfg.llm_model_list = [
+                {
+                    "model_name": "__legacy_openai__",
+                    "litellm_params": {
+                        "model": "__legacy_openai__",
+                        "api_key": "sk-openai-legacy-a",
+                        "api_base": "https://legacy-a.example/v1",
+                        "extra_headers": {"x-tenant": "legacy-a"},
+                    },
+                },
+                {
+                    "model_name": "__legacy_openai__",
+                    "litellm_params": {
+                        "model": "__legacy_openai__",
+                        "api_key": "sk-openai-legacy-b",
+                        "api_base": "https://legacy-b.example/v1",
+                        "extra_headers": {"x-tenant": "legacy-b"},
+                    },
+                },
+            ]
+            cfg.llm_temperature = 0.7
+            mock_cfg.return_value = cfg
+
+            from src.analyzer import GeminiAnalyzer
+
+            analyzer = GeminiAnalyzer()
+            analyzer._config_override = cfg
+
+        captured = {}
+
+        def _fake_call_litellm_with_param_recovery(call, **kwargs):
+            captured["model_list"] = kwargs.get("model_list")
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                usage=None,
+            )
+
+        with patch("src.analyzer.call_litellm_with_param_recovery", side_effect=_fake_call_litellm_with_param_recovery):
+            text, _, _ = analyzer._call_litellm("回归用例", {"max_tokens": 128, "temperature": 0.7})
+
+        assert text == "ok"
+        passed_model_list = captured.get("model_list")
+        assert passed_model_list is not None
+        assert len(passed_model_list) == 2
+        assert all(item["litellm_params"].get("model") == "openai/gpt-4o-mini" for item in passed_model_list)
+        assert [item["litellm_params"]["api_base"] for item in passed_model_list] == [
+            "https://legacy-a.example/v1",
+            "https://legacy-b.example/v1",
+        ]
+        assert [item["litellm_params"]["extra_headers"] for item in passed_model_list] == [
+            {"x-tenant": "legacy-a"},
+            {"x-tenant": "legacy-b"},
+        ]
+
+    @patch("src.analyzer.Router")
+    def test_analyzer_legacy_router_recovery_cache_is_scoped_by_api_base(self, mock_router):
+        """Analyzer legacy recovery should not leak across same model different api_base."""
+        from src.analyzer import call_litellm_with_param_recovery as real_call
+        from src.llm.generation_params import clear_litellm_generation_param_recovery_cache
+
+        clear_litellm_generation_param_recovery_cache()
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="analyzer ok"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+        )
+        strict_router = MagicMock()
+        flex_router = MagicMock()
+        strict_router.completion.side_effect = [
+            RuntimeError("Unsupported parameter: temperature is not supported"),
+            response,
+        ]
+        flex_router.completion.return_value = response
+        mock_router.side_effect = [strict_router, flex_router]
+
+        strict_cfg = SimpleNamespace(
+            litellm_model="openai/shared-model",
+            litellm_fallback_models=[],
+            llm_model_list=[],
+            llm_temperature=0.2,
+            gemini_api_keys=[],
+            anthropic_api_keys=[],
+            openai_api_keys=["sk-strict-key-1", "sk-strict-key-2"],
+            deepseek_api_keys=[],
+            openai_base_url="https://strict.example/v1",
+        )
+        flex_cfg = SimpleNamespace(
+            litellm_model="openai/shared-model",
+            litellm_fallback_models=[],
+            llm_model_list=[],
+            llm_temperature=0.2,
+            gemini_api_keys=[],
+            anthropic_api_keys=[],
+            openai_api_keys=["sk-flex-key-1", "sk-flex-key-2"],
+            deepseek_api_keys=[],
+            openai_base_url="https://flex.example/v1",
+        )
+
+        captured_model_lists = []
+
+        def _fake_recovery(call, **kwargs):
+            captured_model_lists.append(kwargs.get("model_list"))
+            return real_call(call, **kwargs)
+
+        import src.analyzer as analyzer_module
+        from src.analyzer import GeminiAnalyzer
+
+        with patch.object(analyzer_module, "call_litellm_with_param_recovery", side_effect=_fake_recovery):
+            GeminiAnalyzer(config=strict_cfg)._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+            )
+            GeminiAnalyzer(config=flex_cfg)._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+            )
+
+        assert len(captured_model_lists) == 2
+        strict_model_list = captured_model_lists[0]
+        flex_model_list = captured_model_lists[1]
+        assert strict_model_list is not None
+        assert flex_model_list is not None
+        assert all(
+            item.get("litellm_params", {}).get("api_base") == "https://strict.example/v1"
+            for item in strict_model_list
+        )
+        assert all(
+            item.get("litellm_params", {}).get("api_base") == "https://flex.example/v1"
+            for item in flex_model_list
+        )
+        assert strict_router.completion.call_args_list[0].kwargs["temperature"] == 0.2
+        assert "temperature" not in strict_router.completion.call_args_list[1].kwargs
+        assert flex_router.completion.call_args.kwargs["temperature"] == 0.2
 
     def test_call_litellm_stream_falls_back_to_non_stream_before_first_chunk(self):
         analyzer = self._make_analyzer()
@@ -136,10 +375,59 @@ class TestAnalyzerGenerateText:
 
         assert text == "full response"
         assert model == "gemini/gemini-2.0-flash"
-        assert usage == {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9}
+        _assert_usage_contains(usage, {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9})
         assert len(dispatch_calls) == 2
         assert dispatch_calls[0]["stream"] is True
         assert "stream" not in dispatch_calls[1]
+
+    @pytest.mark.parametrize(
+        "provider_model,response_payload,expected_text",
+        _OPENAI_COMPATIBILITY_PAYLOAD_FIXTURES,
+        ids=["issue1279-message-content-null", "issue1279-message-content-list"],
+    )
+    def test_call_litellm_extracts_external_provider_text_shapes(self, provider_model, response_payload, expected_text):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model=provider_model,
+            litellm_fallback_models=[],
+            llm_model_list=[],
+        )
+        with patch.object(analyzer, "_dispatch_litellm_completion", return_value=response_payload):
+            text, model_used, usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+            )
+
+        assert text == expected_text
+        assert model_used == provider_model
+        _assert_usage_contains(usage, response_payload["usage"])
+
+    def test_call_litellm_falls_back_to_message_content_when_blocks_empty(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/deepseek-chat",
+            litellm_fallback_models=[],
+            llm_model_list=[],
+        )
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    content_blocks=[],
+                    message=SimpleNamespace(content="message response"),
+                )
+            ],
+            usage=None,
+        )
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", return_value=response):
+            text, model_used, usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+            )
+
+        assert text == "message response"
+        assert model_used == "openai/deepseek-chat"
+        _assert_no_provider_usage_hmac_only(usage)
 
     def test_call_litellm_normalizes_kimi_k26_temperature(self):
         analyzer = self._make_analyzer()
@@ -161,7 +449,7 @@ class TestAnalyzerGenerateText:
 
         assert text == "ok"
         assert model_used == "openai/kimi-k2.6"
-        assert usage == {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        _assert_usage_contains(usage, {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
         call_kwargs = mock_dispatch.call_args.args[1]
         assert call_kwargs["temperature"] == 1.0
 
@@ -190,7 +478,7 @@ class TestAnalyzerGenerateText:
 
         assert text == "ok"
         assert model_used == "kimi_router"
-        assert usage == {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        _assert_usage_contains(usage, {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
         call_kwargs = mock_dispatch.call_args.args[1]
         assert call_kwargs["temperature"] == 1.0
 
@@ -222,9 +510,261 @@ class TestAnalyzerGenerateText:
 
         assert text == "ok"
         assert model_used == "kimi_router"
-        assert usage == {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        _assert_usage_contains(usage, {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
         call_kwargs = mock_dispatch.call_args.args[1]
         assert call_kwargs["temperature"] == 0.6
+
+    def test_call_litellm_resolves_anthropic_alias_for_usage_normalization(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="claude-router",
+            litellm_fallback_models=[],
+            llm_model_list=[
+                {
+                    "model_name": "claude-router",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-test"},
+                }
+            ],
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+            usage=SimpleNamespace(
+                input_tokens=100,
+                output_tokens=30,
+                cache_read_input_tokens=10,
+                cache_creation_input_tokens=20,
+            ),
+        )
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", return_value=response):
+            text, model_used, usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+            )
+
+        assert text == "ok"
+        assert model_used == "claude-router"
+        assert usage["prompt_tokens"] == 130
+        assert usage["completion_tokens"] == 30
+        assert usage["total_tokens"] == 160
+        assert usage["normalized_cache_read_tokens"] == 10
+        assert usage["normalized_cache_write_tokens"] == 20
+        assert usage["cache_observation"] == "read_and_write"
+
+    def test_call_litellm_uses_openai_wire_model_for_alias_usage_threshold(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="fast",
+            litellm_fallback_models=[],
+            llm_model_list=[
+                {
+                    "model_name": "fast",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                }
+            ],
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+            usage=SimpleNamespace(
+                prompt_tokens=500,
+                completion_tokens=20,
+                total_tokens=520,
+                prompt_tokens_details={"cached_tokens": 0},
+            ),
+        )
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", return_value=response):
+            text, model_used, usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+            )
+
+        assert text == "ok"
+        assert model_used == "fast"
+        assert usage["provider_min_cache_tokens"] == 1024
+        assert usage["cache_capability"] == "supported"
+        assert usage["cache_eligibility"] == "below_threshold"
+        assert usage["cache_observation"] == "unknown"
+        assert usage["normalized_cache_read_tokens"] == 0
+        assert usage["normalized_cache_eligible_input_tokens"] is None
+        assert usage["normalized_cache_hit_ratio"] is None
+
+    def test_call_litellm_preserves_anthropic_litellm_prompt_tokens_without_input_tokens(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="claude-router",
+            litellm_fallback_models=[],
+            llm_model_list=[
+                {
+                    "model_name": "claude-router",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-test"},
+                }
+            ],
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+            usage=SimpleNamespace(
+                prompt_tokens=100,
+                completion_tokens=20,
+                total_tokens=120,
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=0,
+            ),
+        )
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", return_value=response):
+            text, model_used, usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+            )
+
+        assert text == "ok"
+        assert model_used == "claude-router"
+        assert usage["prompt_tokens"] == 100
+        assert usage["completion_tokens"] == 20
+        assert usage["total_tokens"] == 120
+        assert usage["normalized_prompt_tokens"] == 100
+        assert usage["normalized_uncached_input_tokens"] == 100
+        assert usage["cache_observation"] == "zero_hit"
+        assert usage["messages_hmac"] and len(usage["messages_hmac"]) == 64
+
+    def test_call_litellm_stream_resolves_glm_alias_for_usage_normalization(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="glm-router",
+            litellm_fallback_models=[],
+            llm_model_list=[
+                {
+                    "model_name": "glm-router",
+                    "litellm_params": {"model": "zhipu/glm-4.5"},
+                }
+            ],
+        )
+
+        def stream_response():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="ok"))],
+                usage=SimpleNamespace(
+                    prompt_tokens=1200,
+                    completion_tokens=80,
+                    total_tokens=1280,
+                    prompt_tokens_details={"cached_tokens": 1200},
+                ),
+            )
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", return_value=stream_response()):
+            text, model_used, usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+                stream=True,
+            )
+
+        assert text == "ok"
+        assert model_used == "glm-router"
+        assert usage["normalized_cache_read_tokens"] == 1200
+        assert usage["cache_capability"] == "supported"
+        assert usage["cache_observation"] == "full_hit"
+
+    def test_call_litellm_stream_uses_openai_wire_model_for_alias_usage_threshold(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="fast",
+            litellm_fallback_models=[],
+            llm_model_list=[
+                {
+                    "model_name": "fast",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                }
+            ],
+        )
+
+        def stream_response():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="ok"))],
+                usage=SimpleNamespace(
+                    prompt_tokens=500,
+                    completion_tokens=20,
+                    total_tokens=520,
+                    prompt_tokens_details={"cached_tokens": 0},
+                ),
+            )
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", return_value=stream_response()):
+            text, model_used, usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+                stream=True,
+            )
+
+        assert text == "ok"
+        assert model_used == "fast"
+        assert usage["provider_min_cache_tokens"] == 1024
+        assert usage["cache_capability"] == "supported"
+        assert usage["cache_eligibility"] == "below_threshold"
+        assert usage["cache_observation"] == "unknown"
+        assert usage["normalized_cache_read_tokens"] == 0
+        assert usage["normalized_cache_eligible_input_tokens"] is None
+        assert usage["normalized_cache_hit_ratio"] is None
+
+    def test_call_litellm_omits_temperature_for_gpt5_family(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/gpt5.5-ferr",
+            litellm_fallback_models=[],
+            llm_model_list=[],
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", return_value=response) as mock_dispatch:
+            text, model_used, usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+            )
+
+        assert text == "ok"
+        assert model_used == "openai/gpt5.5-ferr"
+        _assert_usage_contains(usage, {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
+        call_kwargs = mock_dispatch.call_args.args[1]
+        assert "temperature" not in call_kwargs
+
+    def test_call_litellm_recovers_from_temperature_default_error(self):
+        from src.llm.generation_params import clear_litellm_generation_param_recovery_cache
+
+        clear_litellm_generation_param_recovery_cache()
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            litellm_model="openai/custom-default-temp",
+            litellm_fallback_models=[],
+            llm_model_list=[],
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+        calls = []
+
+        def _dispatch(model, call_kwargs, **_kwargs):
+            calls.append(dict(call_kwargs))
+            if len(calls) == 1:
+                raise RuntimeError(
+                    "temperature=0.2 is unsupported. Only the default (1.0) value is supported."
+                )
+            return response
+
+        with patch.object(analyzer, "_dispatch_litellm_completion", side_effect=_dispatch):
+            text, model_used, usage = analyzer._call_litellm(
+                "prompt",
+                {"max_tokens": 128, "temperature": 0.2},
+            )
+
+        assert text == "ok"
+        assert model_used == "openai/custom-default-temp"
+        _assert_usage_contains(usage, {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
+        assert calls[0]["temperature"] == 0.2
+        assert calls[1]["temperature"] == 1.0
 
     def test_call_litellm_keeps_user_temperature_for_non_kimi_fallback(self):
         analyzer = self._make_analyzer()
@@ -253,7 +793,7 @@ class TestAnalyzerGenerateText:
 
         assert text == "fallback ok"
         assert model_used == "openai/gpt-4o-mini"
-        assert usage == {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        _assert_usage_contains(usage, {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
         assert temperatures == [
             ("openai/kimi-k2.6", 1.0),
             ("openai/gpt-4o-mini", 0.2),
@@ -306,7 +846,7 @@ class TestAnalyzerGenerateText:
 
         assert text == "fallback"
         assert model_used == "provider/good-model"
-        assert usage == {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9}
+        _assert_usage_contains(usage, {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9})
         assert dispatch_calls == [
             ("provider/bad-model", True),
             ("provider/bad-model", False),
@@ -373,6 +913,60 @@ class TestAnalyzerGenerateText:
         assert [progress for progress, _ in progress_updates] == [68, 93, 94, 95]
         assert "补全重试" in progress_updates[2][1]
         assert "解析 JSON" in progress_updates[3][1]
+
+    def test_analyze_persists_provider_usage_from_private_stream_hidden_usage_best_effort(self):
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            gemini_request_delay=0,
+            report_language="zh",
+            litellm_model="openai/gpt-4o-mini",
+            litellm_fallback_models=[],
+            llm_model_list=[],
+            llm_temperature=0.2,
+            report_integrity_enabled=False,
+            report_integrity_retry=0,
+        )
+
+        from src.analyzer import AnalysisResult
+
+        parsed_result = AnalysisResult(
+            code="600519",
+            name="贵州茅台",
+            sentiment_score=80,
+            trend_prediction="看多",
+            operation_advice="持有",
+            analysis_summary="分析结果",
+        )
+
+        def stream_response():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content='{"sentiment_score":80}'))],
+                usage=None,
+            )
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=""))],
+                usage=None,
+                _hidden_params={
+                    "usage": SimpleNamespace(prompt_tokens=11, completion_tokens=2, total_tokens=13)
+                },
+            )
+
+        with patch.object(analyzer, "is_available", return_value=True), \
+             patch.object(analyzer, "_get_analysis_system_prompt", return_value="system"), \
+             patch.object(analyzer, "_format_prompt", return_value="prompt"), \
+             patch.object(analyzer, "_validate_json_response"), \
+             patch.object(analyzer, "_dispatch_litellm_completion", return_value=stream_response()), \
+             patch.object(analyzer, "_parse_response", return_value=parsed_result), \
+             patch.object(analyzer, "_build_market_snapshot", return_value={}), \
+             patch("src.analyzer.persist_llm_usage") as mock_usage:
+            result = analyzer.analyze({"code": "600519", "stock_name": "贵州茅台"})
+
+        assert result.analysis_summary == "分析结果"
+        mock_usage.assert_called_once()
+        usage_arg, model_arg = mock_usage.call_args[0]
+        assert model_arg == "openai/gpt-4o-mini"
+        _assert_usage_contains(usage_arg, {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13})
+        assert mock_usage.call_args.kwargs == {"call_type": "analysis", "stock_code": "600519"}
 
     def test_parse_response_non_json_returns_failure(self):
         """_parse_response must return success=False when LLM output is not valid JSON."""
@@ -588,6 +1182,7 @@ class TestMarketAnalyzerBypassFix:
             cfg.llm_model_list = []
             cfg.openai_base_url = None
             cfg.market_review_region = "cn"
+            cfg.market_review_color_scheme = "green_up"
             cfg.report_language = "zh"
             mock_cfg.return_value = cfg
             mock_cfg2.return_value = cfg
@@ -729,6 +1324,8 @@ class TestMarketAnalyzerBypassFix:
         assert "## 2026-03-05 大盘复盘" in result
         assert "### 一、盘面总览" in result
         assert "今日美股市场整体呈现**小幅下跌**态势" in result
+        assert "### 6. Strategy Framework" not in result
+        assert "### 六、策略框架" in result
         assert "### 1. Market Summary" not in result
         assert "US Market Recap" not in result
 
@@ -772,8 +1369,9 @@ Sector text.
 
         result = ma._inject_data_into_review(review, overview)
 
-        assert "Advancers **3200**" in result
-        assert "Turnover **14567** (CNY 100m)" in result
+        assert "- **Market Signal**: 66/100 (constructive, risk-on)" in result
+        assert "- **Breadth**: Advancers 3200 / Decliners 1800 / Flat 100;" in result
+        assert "Turnover 14567 (CNY 100m)" in result
         assert "| Index | Last | Change % | Open | High | Low | Amplitude | Turnover (CNY 100m) |" in result
         assert "#### Leading Sectors" in result
         assert "| 1 | AI算力 | +3.25% |" in result
@@ -827,20 +1425,48 @@ Sector text.
 
         result = ma._inject_data_into_review(review, overview, news)
 
-        assert "大盘红绿灯" in result
-        assert "green（可进攻）" in result
-        assert "核心原因" in result
+        assert "盘面信号" in result
+        assert "66/100（偏暖，可进攻）" in result
+        assert "绿灯（可进攻）" not in result
+        assert "大盘红绿灯" not in result
+        assert "green（可进攻）" not in result
+        assert "信号依据" in result
+        signal_line = next(line for line in result.splitlines() if "**盘面信号**" in line)
+        drivers_line = next(line for line in result.splitlines() if "**信号依据**" in line)
+        assert signal_line.startswith("- ")
+        assert "66/100" in signal_line
+        assert "█" not in result
+        assert "░" not in result
+        assert "盘面温度" not in drivers_line
         assert "操作建议" in result
-        assert "盘面温度" in result
+        assert "盘面温度" not in result
         assert "| 上涨/下跌/平盘 | 3200 / 1800 / 100 |" in result
         assert "| 指数 | 最新 | 涨跌幅 | 开盘 | 最高 | 最低 | 振幅 | 成交额(亿) |" in result
         assert "| 上证指数 | 3300.00 | 🟢 +0.36% | 3288.00 | 3312.00 | 3276.00 | 1.10% | 1450 |" in result
         assert "#### 领涨板块 Top 5" in result
         assert "| 1 | AI算力 | +3.25% |" in result
-        assert "#### 近三日催化线索" in result
-        assert "AI算力板块走强" in result
+        assert "#### 近三日市场线索" not in result
+        assert "AI算力板块走强" not in result
+        assert "新闻。" in result
+        assert "算力产业链延续活跃" not in result
 
-    def test_news_block_labels_snippets_and_preserves_source_url(self):
+    def test_market_review_payload_sections_skip_top_report_title(self):
+        from src.market_analyzer import MarketAnalyzer
+
+        ma = MarketAnalyzer.__new__(MarketAnalyzer)
+        sections = ma._split_report_sections("""## 2026-06-03 大盘复盘
+
+> 今日指数分化。
+
+### 一、盘面总览
+正文
+""")
+
+        assert sections[0]["key"] == "overview"
+        assert "今日指数分化" in sections[0]["markdown"]
+        assert all(section["title"] != "2026-06-03 大盘复盘" for section in sections)
+
+    def test_news_block_renders_title_source_and_link_only(self):
         from src.market_analyzer import MarketAnalyzer
 
         ma = MarketAnalyzer.__new__(MarketAnalyzer)
@@ -861,10 +1487,15 @@ Sector text.
             }
         ])
 
-        assert "摘要/线索片段" in result
+        assert "#### 近三日市场线索" in result
+        assert "| 序号 |" not in result
+        assert "摘要/线索片段" not in result
         assert "关注点" not in result
-        assert "成交额放大" in result
-        assert "[东方财富 / 2026-05-06](https://example.com/news/1)" in result
+        assert "成交额放大" not in result
+        assert (
+            "- 1. [A股收评：科创50指数放量反弹涨5.47% 两市成交额重回3万亿元]"
+            "(https://example.com/news/1)（东方财富 / 2026-05-06）"
+        ) in result
 
     def test_news_block_uses_dash_when_source_metadata_missing(self):
         from src.market_analyzer import MarketAnalyzer
@@ -880,8 +1511,32 @@ Sector text.
             }
         ])
 
-        assert "| 1 | 政策利好带动板块活跃 | 相关主题成交放大 | - |" in result
-        assert "| 1 | 政策利好带动板块活跃 | 相关主题成交放大 | source |" not in result
+        assert "- 1. 政策利好带动板块活跃" in result
+        assert "相关主题成交放大" not in result
+        assert "| 1 | 政策利好带动板块活跃 |" not in result
+
+    def test_news_block_uses_english_metadata_punctuation(self):
+        from src.market_analyzer import MarketAnalyzer
+
+        ma = MarketAnalyzer.__new__(MarketAnalyzer)
+        ma.config = SimpleNamespace(report_language="en")
+        ma.region = "us"
+
+        result = ma._build_news_block([
+            {
+                "title": "Chip stocks rally as AI demand improves",
+                "source": "Reuters",
+                "published_date": "2026-05-06",
+                "url": "https://example.com/news/2",
+            }
+        ])
+
+        assert "#### News Catalysts" in result
+        assert (
+            "- 1. [Chip stocks rally as AI demand improves](https://example.com/news/2)"
+            " (Reuters / 2026-05-06)"
+        ) in result
+        assert "（Reuters" not in result
 
     def test_review_prompt_caps_news_url_context(self):
         from src.market_analyzer import MarketOverview
@@ -928,6 +1583,12 @@ Sector text.
         assert snapshot["status"] == "red"
         assert snapshot["label"] == "偏防守"
         assert snapshot["score"] < 40
+        assert snapshot["region"] == "cn"
+        assert snapshot["trade_date"] == "2026-03-06"
+        assert snapshot["data_quality"] == "ok"
+        assert snapshot["dimensions"]["breadth"]["available"] is True
+        assert snapshot["dimensions"]["index"]["available"] is True
+        assert snapshot["dimensions"]["limit"]["available"] is True
         assert any("亏钱效应" in reason for reason in snapshot["reasons"])
 
     def test_market_light_snapshot_uses_english_labels_and_reasons(self):
@@ -951,15 +1612,117 @@ Sector text.
         snapshot = ma.build_market_light_snapshot(overview)
 
         assert snapshot["status"] == "red"
-        assert snapshot["label"] == "defensive"
+        assert snapshot["label"] == "risk-off"
         assert snapshot["guidance"] == (
             "Risk is elevated; prioritize drawdown control and avoid chasing weak rebounds."
         )
-        assert snapshot["reasons"][0].startswith("market temperature ")
+        assert not any(reason.startswith("market temperature ") for reason in snapshot["reasons"])
         assert any(
             reason.startswith("advancers ratio ") and "downside pressure dominates" in reason
             for reason in snapshot["reasons"]
         )
+
+    def test_market_light_snapshot_marks_us_without_breadth_as_partial(self):
+        from src.core.market_profile import US_PROFILE
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="review")
+        ma.region = "us"
+        ma.profile = US_PROFILE
+        ma.config.report_language = "en"
+        overview = MarketOverview(
+            date="2026-03-06",
+            indices=[MarketIndex(code="SPX", name="S&P 500", current=5000, change_pct=0.5)],
+        )
+
+        snapshot = ma.build_market_light_snapshot(overview)
+
+        assert snapshot["region"] == "us"
+        assert snapshot["data_quality"] == "partial"
+        assert snapshot["dimensions"]["breadth"] == {"score": 50, "available": False}
+        assert snapshot["dimensions"]["index"]["available"] is True
+        assert snapshot["dimensions"]["limit"] == {"score": 50, "available": False}
+
+    def test_market_review_payload_omits_breadth_for_markets_without_stats(self):
+        from src.core.market_profile import US_PROFILE
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="复盘结果")
+        ma.region = "us"
+        ma.profile = US_PROFILE
+
+        payload = ma.build_market_review_payload(
+            MarketOverview(
+                date="2026-03-18",
+                indices=[
+                    MarketIndex(code="SPX", name="S&P 500", current=5200.0, change_pct=0.6),
+                ],
+                up_count=1000,
+                down_count=400,
+                limit_up_count=10,
+                limit_down_count=0,
+                total_amount=9800.0,
+            ),
+            [],
+            "美股复盘报告",
+            market_light_snapshot={"dimensions": {"breadth": {"score": 60, "available": True}}},
+        )
+
+        assert "breadth" not in payload
+        assert payload["indices"][0]["code"] == "SPX"
+
+    def test_market_review_payload_omits_breadth_for_cn_market_without_available_stats(self):
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="复盘结果")
+        payload = ma.build_market_review_payload(
+            MarketOverview(
+                date="2026-03-18",
+                indices=[
+                    MarketIndex(code="000001", name="上证指数", current=3200.0, change_pct=0.6),
+                ],
+                up_count=0,
+                down_count=0,
+                flat_count=0,
+                limit_up_count=0,
+                limit_down_count=0,
+                total_amount=0.0,
+            ),
+            [],
+            "A股复盘报告",
+            market_light_snapshot={"dimensions": {"breadth": {"score": 55, "available": False}}},
+        )
+
+        assert "breadth" not in payload
+        assert payload["indices"][0]["name"] == "上证指数"
+
+    def test_market_review_payload_includes_breadth_only_when_stats_available(self):
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="复盘结果")
+        payload = ma.build_market_review_payload(
+            MarketOverview(
+                date="2026-03-18",
+                indices=[
+                    MarketIndex(code="000001", name="上证指数", current=3200.0, change_pct=0.6),
+                ],
+                up_count=1200,
+                down_count=900,
+                flat_count=60,
+                limit_up_count=12,
+                limit_down_count=4,
+                total_amount=12345.0,
+            ),
+            [],
+            "A股复盘报告",
+            market_light_snapshot={"dimensions": {"breadth": {"score": 62, "available": True}}},
+        )
+
+        assert payload["breadth"] is not None
+        assert payload["breadth"]["up_count"] == 1200
+        assert payload["breadth"]["down_count"] == 900
+        assert payload["breadth"]["limit_up_count"] == 12
+        assert payload["breadth"]["total_amount"] == 12345.0
 
     def test_us_english_indices_do_not_label_turnover_as_cny(self):
         from src.core.market_profile import US_PROFILE
@@ -990,6 +1753,43 @@ Sector text.
         assert "CNY 100m" not in result
         assert "Turnover (USD bn)" in result
         assert "| S&P 500 | 5200.00 |" in result
+
+    def test_indices_block_uses_configured_red_up_color_scheme(self):
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value=None)
+        ma.config.market_review_color_scheme = "red_up"
+        overview = MarketOverview(
+            date="2026-03-05",
+            indices=[
+                MarketIndex(code="000001", name="上证指数", current=3200.0, change_pct=0.68),
+                MarketIndex(code="399001", name="深证成指", current=9800.0, change_pct=-0.42),
+                MarketIndex(code="399006", name="创业板指", current=2100.0, change_pct=0.0),
+            ],
+        )
+
+        result = ma._build_indices_block(overview)
+
+        assert "| 上证指数 | 3200.00 | 🔴 +0.68% |" in result
+        assert "| 深证成指 | 9800.00 | 🟢 -0.42% |" in result
+        assert "| 创业板指 | 2100.00 | ⚪ +0.00% |" in result
+
+    def test_indices_block_keeps_green_up_default_color_scheme(self):
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value=None)
+        overview = MarketOverview(
+            date="2026-03-05",
+            indices=[
+                MarketIndex(code="000001", name="上证指数", current=3200.0, change_pct=0.68),
+                MarketIndex(code="399001", name="深证成指", current=9800.0, change_pct=-0.42),
+            ],
+        )
+
+        result = ma._build_indices_block(overview)
+
+        assert "| 上证指数 | 3200.00 | 🟢 +0.68% |" in result
+        assert "| 深证成指 | 9800.00 | 🔴 -0.42% |" in result
 
     def test_no_private_attribute_access_in_market_analyzer_source(self):
         """Static guard: market_analyzer.py must not access private analyzer attrs."""

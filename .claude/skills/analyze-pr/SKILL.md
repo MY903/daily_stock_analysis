@@ -29,7 +29,14 @@ gh pr diff <pr_number> --repo ZhuLinsen/daily_stock_analysis
 gh run view <run_id> --log-failed
 ```
 
-### Step 2: 按仓库模板检查描述完整性
+### Step 2: 检查标题与描述完整性
+
+先检查 PR title 是否符合 `AGENTS.md` 的非阻断建议：
+
+- 格式应为 `<类型>: <修改内容>`，例如 `fix: 修复大盘分析历史记录丢失`
+- 类型优先为 `fix`/`feat`/`refactor`/`docs`/`chore`/`test`/`ci`
+- 不应包含 `[codex]`、`codex`、`autocode`、`copilot` 或其他工具/agent 来源前缀
+- 标题应描述实际变更；若标题与 diff 不符，在描述完整性中指出，但不应单独作为 review process blocker。
 
 对照 `.github/PULL_REQUEST_TEMPLATE.md`，确认是否覆盖：
 
@@ -38,6 +45,7 @@ gh run view <run_id> --log-failed
 - `Scope Of Change`
 - `Issue Link`
 - `Verification Commands And Results`
+- `Visual Evidence`（仅当 PR 修改报告格式、报告渲染效果或 Web UI 界面时要求截图或替代可视证据）
 - `Compatibility And Risk`
 - `Rollback Plan`
 
@@ -48,6 +56,8 @@ gh run view <run_id> --log-failed
 - 已验证的调用链路覆盖面
 - 旧配置是否会被静默改写、清空、迁移或保持不变
 - 最小回滚路径（通常是 revert 本 PR）
+
+若 PR 修改报告格式、报告渲染效果或 Web UI 界面，还要检查 `Visual Evidence` 是否附受影响报告 / 页面截图；涉及前后差异时优先检查前后对比。若无法截图，描述中应说明原因与替代可视证据。
 
 ### Step 3: 优先使用 CI / Diff 证据
 
@@ -91,6 +101,7 @@ gh run view <run_id> --log-failed
 - 必要性：
 - 是否有对应 issue：
 - PR 类型：
+- PR title：
 - description 完整性：
 - 验证情况：
 - 主要风险：
