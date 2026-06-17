@@ -146,4 +146,4 @@ with col_b:
 # ── 自动刷新逻辑 ────────────────────────────────────────────────────
 if auto_refresh:
     st.caption("⏳ 自动刷新中（每 10 秒）…")
-    st.rerun(10)
+    st.rerun(wait_seconds=10)

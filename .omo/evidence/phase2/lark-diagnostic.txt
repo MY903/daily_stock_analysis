@@ -1,0 +1,163 @@
+WARNING: [DingTalk Stream] dingtalk-stream SDK 未安装，Stream 模式不可用
+WARNING: [DingTalk Stream] 请运行: pip install dingtalk-stream
+WARNING: Deprecation warning:
+deepseek-chat will be deprecated on 2026-07-24,
+please migrate to deepseek-v4-flash.
+========================================================================
+LARK PUSH DIAGNOSTIC
+========================================================================
+
+  LARK_APP_ID          = cli_aaa55596f2389cc3
+  LARK_APP_SECRET      = ***F0qU
+  LARK_DEFAULT_CHAT_ID = oc_728d6f1e582d25dc719da8a17744d96d
+
+────────────────────────────────────────────────────────────────────────
+STEP 1: SDK availability
+────────────────────────────────────────────────────────────────────────
+  [OK] lark-oapi is importable
+  SDK location: /home/dministrator/.local/lib/python3.12/site-packages/lark_oapi
+
+────────────────────────────────────────────────────────────────────────
+STEP 2: Get app_access_token (verify credentials)
+────────────────────────────────────────────────────────────────────────
+  HTTP status:  200
+  code:         0
+  msg:          ok
+  log_id:       20260617191250D96D94E7AB456D81C6DE
+  token (first 20): t-g1046hjcJPF4LM62VC...
+  expire:           7200
+  [OK] Credentials are valid
+
+────────────────────────────────────────────────────────────────────────
+STEP 3: Get tenant_access_token
+────────────────────────────────────────────────────────────────────────
+  HTTP status:  200
+  code:         0
+  msg:          ok
+  log_id:       202606171912506DCFDC3D85A9EC6B7ACE
+  token (first 20): t-g1046hjcJPF4LM62VC...
+  expire:           7200
+  [OK] Tenant token acquired
+
+────────────────────────────────────────────────────────────────────────
+STEP 4: Send test text message to LARK_DEFAULT_CHAT_ID
+────────────────────────────────────────────────────────────────────────
+  Target:       oc_728d6f1e582d25dc719da8a17744d96d
+  Msg type:     text
+  HTTP status:  200
+  code:         0
+  msg:          success
+  log_id:       202606171912501DC53EC0155C997DF927
+  Raw body:     {
+  "code": 0,
+  "data": {
+    "body": {
+      "content": "{\"text\":\"test from test_lark_push.py\"}"
+    },
+    "chat_id": "oc_728d6f1e582d25dc719da8a17744d96d",
+    "create_time": "1781694771306",
+    "deleted": false,
+    "message_id": "om_x100b6c1c5dfeb8a0c107cc361095d97",
+    "msg_type": "text",
+    "sender": {
+      "id": "cli_aaa55596f2389cc3",
+      "id_type": "app_id",
+      "sender_type": "app",
+      "tenant_key": "2d24b3ce960f975d"
+    },
+    "update_time": "1781694771306",
+    "updated": false
+  },
+  "msg": "success"
+}
+  [OK] Text message sent successfully
+
+────────────────────────────────────────────────────────────────────────
+STEP 5: Send interactive card to LARK_DEFAULT_CHAT_ID
+────────────────────────────────────────────────────────────────────────
+  Target:       oc_728d6f1e582d25dc719da8a17744d96d
+  Msg type:     interactive
+  HTTP status:  200
+  code:         0
+  msg:          success
+  log_id:       20260617191251E3987886DC1D028813CD
+  Raw body:     {
+  "code": 0,
+  "data": {
+    "body": {
+      "content": "{\"title\":\"Diagnostic Card\",\"elements\":[[{\"tag\":\"text\",\"text\":\"This is a \"},{\"tag\":\"text\",\"text\":\"diagnostic\"},{\"tag\":\"text\",\"text\":\" card from test_lark_push.py\"}]]}"
+    },
+    "chat_id": "oc_728d6f1e582d25dc719da8a17744d96d",
+    "create_time": "1781694771909",
+    "deleted": false,
+    "message_id": "om_x100b6c1c5df768b0c38e506d318848e",
+    "msg_type": "interactive",
+    "sender": {
+      "id": "cli_aaa55596f2389cc3",
+      "id_type": "app_id",
+      "sender_type": "app",
+      "tenant_key": "2d24b3ce960f975d"
+    },
+    "update_time": "1781694771909",
+    "updated": false
+  },
+  "msg": "success"
+}
+  [OK] Card sent successfully
+
+────────────────────────────────────────────────────────────────────────
+STEP 6: Test via FeishuReplyClient
+────────────────────────────────────────────────────────────────────────
+  [OK] FeishuReplyClient created
+  send_card() returned: True
+  Actual SDK response:
+    code:         0
+    msg:          success
+    log_id:       2026061719125224FE401CB7E7FA7369A6
+    HTTP status:  200
+    Raw body:     {
+  "code": 0,
+  "data": {
+    "body": {
+      "content": "{\"title\":\"FeishuReplyClient Test\",\"elements\":[[{\"tag\":\"text\",\"text\":\"Sent via FeishuReplyClient.send_card()\"}]]}"
+    },
+    "chat_id": "oc_728d6f1e582d25dc719da8a17744d96d",
+    "create_time": "1781694773129",
+    "deleted": false,
+    "message_id": "om_x100b6c1c5d83d080c1019edf17005af",
+    "msg_type": "interactive",
+    "sender": {
+      "id": "cli_aaa55596f2389cc3",
+      "id_type": "app_id",
+      "sender_type": "app",
+      "tenant_key": "2d24b3ce960f975d"
+    },
+    "update_time": "1781694773129",
+    "updated": false
+  },
+  "msg": "success"
+}
+    success():    True
+
+========================================================================
+DIAGNOSTIC SUMMARY
+========================================================================
+
+If all steps pass (code=0):
+  Credentials valid, bot can access API, messages deliverable.
+  Check if the bot is added to the target chat/group.
+
+If Step 2 fails:
+  LARK_APP_ID or LARK_APP_SECRET is wrong.
+
+If Step 3 fails:
+  App may be disabled or lacking tenant permissions.
+
+If Step 4/5 fail:
+  code=10003:     chat_id doesn't exist
+  code=99991663:  bot NOT a member of the target chat
+  code=99991669:  bot lacks message sending permission
+  code=99991600:  app not enabled for this tenant
+  code=99991601:  app not published yet
+  code=99991668:  message content format invalid
+

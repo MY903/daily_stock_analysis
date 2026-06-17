@@ -201,6 +201,31 @@ class AuditLogger:
                     stats[status_key] = count
             return stats
 
+    def get_all_signals(self, limit: int = 50, offset: int = 0, status: Optional[str] = None) -> List[dict]:
+        """查询所有信号记录，支持分页和可选的 status 筛选
+
+        Args:
+            limit: 返回记录数上限
+            offset: 分页偏移量
+            status: 按状态筛选（PENDING/CONFIRMED/REJECTED/EXPIRED/EXECUTED/FAILED）
+
+        Returns:
+            按 created_at DESC 排序的信号记录列表
+        """
+        with self._get_conn() as conn:
+            if status:
+                cursor = conn.execute(
+                    "SELECT * FROM signal_audit WHERE status=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (status, limit, offset),
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT * FROM signal_audit ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
+            columns = [d[0] for d in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
     # ==================== 维护操作 ====================
 
     def clean_old_records(self, days: int = 90):

@@ -100,8 +100,15 @@ class TigerClient:
         """
         self._ensure_connected()
         briefs = self._quote_client.get_stock_briefs([symbol])
-        if briefs is not None and not briefs.empty:
-            row = briefs.iloc[0]
+        if briefs is not None:
+            if isinstance(briefs, list) and len(briefs) > 0:
+                row = briefs[0]
+                if not isinstance(row, dict):
+                    row = {k: v for k, v in vars(row).items() if not k.startswith('_')}
+            elif hasattr(briefs, 'empty') and not briefs.empty:
+                row = briefs.iloc[0]
+            else:
+                return {"symbol": symbol, "latest_price": None}
             return {
                 "symbol": symbol,
                 "latest_price": row.get("latest_price"),
@@ -121,8 +128,11 @@ class TigerClient:
         """获取美股市场状态"""
         self._ensure_connected()
         status = self._quote_client.get_market_status(Market.US)
-        if status is not None and not status.empty:
-            return status.iloc[0].get("status", "UNKNOWN")
+        if status is not None:
+            if isinstance(status, list) and len(status) > 0:
+                return status[0].get("status", "UNKNOWN") if isinstance(status[0], dict) else "UNKNOWN"
+            elif hasattr(status, 'empty') and not status.empty:
+                return status.iloc[0].get("status", "UNKNOWN")
         return "UNKNOWN"
 
     # ==================== 订单管理 ====================

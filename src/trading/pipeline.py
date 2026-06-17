@@ -9,8 +9,9 @@ import asyncio
 import logging
 from typing import Any, Optional
 
+from config.settings import settings, TradingMode
 from src.trading.config import load_config
-from src.trading.signal import Signal, SignalAction, SignalSource
+from src.trading.signal import Signal, SignalAction, SignalSource, SignalStatus
 from src.trading.signal_generator import SignalGenerator
 from src.trading.risk_manager import RiskManager
 from src.trading.card_handler import SignalConfirmHandler
@@ -83,12 +84,44 @@ class QuantWeaselPipeline:
 
         # 审计日志：已创建
         self._audit_logger.log_created(signal)
-        logger.info("信号已创建: %s %s %s", signal.symbol, signal.action.value, signal.signal_id)
+        logger.info("信号已创建: %s %s %s [mode=%s]",
+                     signal.symbol, signal.action.value,
+                     signal.signal_id, settings.TRADING_MODE.value)
 
-        # 推送飞书
+        # ==================== SANDBOX / PAPER: 自动确认并执行 ====================
+        if settings.TRADING_MODE in (TradingMode.SANDBOX, TradingMode.PAPER):
+            result = self._execution_engine.execute(signal)
+            if result.get("success"):
+                signal.status = SignalStatus.EXECUTED
+                # 结果通知（best-effort，不阻断流程）
+                try:
+                    await self._card_handler.push_execution_result(
+                        signal, result.get("order_id", ""), True
+                    )
+                except Exception:
+                    logger.warning("[%s] 推送执行结果通知失败（非阻断）",
+                                   settings.TRADING_MODE.value)
+            elif result.get("risk_blocked"):
+                signal.status = SignalStatus.FAILED
+                try:
+                    await self._card_handler.push_risk_intercept(
+                        signal, result.get("message", "风控拦截")
+                    )
+                except Exception:
+                    logger.warning("[%s] 推送风控拦截通知失败（非阻断）",
+                                   settings.TRADING_MODE.value)
+            else:
+                signal.status = SignalStatus.FAILED
+
+            logger.info("[%s] 信号已自动执行: %s success=%s",
+                         settings.TRADING_MODE.value,
+                         signal.signal_id, result.get("success"))
+            return signal
+
+        # ==================== PROD: 推送飞书确认卡片 ====================
         success = await self._card_handler.push_signal_card(signal)
         if not success:
-            logger.error("信号卡片推送失败: %s", signal.signal_id)
+            logger.error("[PROD] 信号卡片推送失败: %s", signal.signal_id)
             return None
 
         return signal
