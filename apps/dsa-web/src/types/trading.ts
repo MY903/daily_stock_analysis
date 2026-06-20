@@ -75,3 +75,22 @@ export interface StrategyInfo {
   class_name: string;
   enabled: boolean;
 }
+
+// ============ Bridge ============
+
+export interface BridgeStatus {
+  enabled: boolean;
+  running: boolean;
+  poll_interval_sec: number;
+  min_confidence: number;
+  max_age_sec: number;
+  allowed_source_types: string[];
+  allowed_actions: string[];
+  last_run: string | null;
+  last_result: {
+    polled: number;
+    accepted: number;
+    rejected: number;
+    errors: number;
+  } | null;
+}

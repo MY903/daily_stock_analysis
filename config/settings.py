@@ -65,6 +65,19 @@ class Settings(BaseSettings):
         description="是否开启自动下单（false = 仅发通知不下单）。默认由 TRADING_MODE 决定：SANDBOX=False, PAPER/PROD=True",
     )
 
+    ENABLE_TRADING: bool = Field(
+        default=False,
+        description="是否启用交易模块（true 时挂载交易路由和信号桥接）",
+    )
+    BRIDGE_POLL_INTERVAL_SEC: int = Field(
+        default=300,
+        description="决策信号桥接器轮询间隔（秒）",
+    )
+    ENABLE_MCP_SERVER: bool = Field(
+        default=False,
+        description="是否启用 MCP Server（Model Context Protocol）",
+    )
+
     # ============================================================
     # 飞书/Lark 通知配置
     # ============================================================

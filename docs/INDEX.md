@@ -69,3 +69,12 @@
 | [英文文档索引](INDEX_EN.md) | English documentation index |
 | [英文 README](README_EN.md) | English project overview and quick start |
 | [繁中 README](README_CHT.md) | 繁體中文項目概覽與快速開始 |
+
+## QuantWeasel 交易系统
+
+| 文档 | 内容 |
+|------|------|
+| [QuantWeasel 系统架构](quantweasel-architecture.md) | 模块映射、流水线、运行模式、调度体系 |
+| [策略开发指南](quantweasel-strategy-dev.md) | BaseStrategy 基类、注册、技术/AI/决策信号策略 |
+| [风控配置说明](quantweasel-risk.md) | 8 维度风控检查、配置方式、审计日志 |
+| [部署与配置](quantweasel-deploy.md) | 独立服务/嵌入/Streamlit/命令行/Docker 部署 |

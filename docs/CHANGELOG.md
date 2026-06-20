@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 新增 DecisionSignal—QuantWeasel 交易桥接（DecisionSignalBridge），支持自动轮询活跃决策信号并推送至交易流水线
+- [新功能] 新增信号驱动策略（SignalDrivenStrategy），消费 DecisionSignalService 持久化信号，通过 StrategyRegistry 注册
+- [新功能] 新增 DSA MCP Server（Model Context Protocol），AI 客户端可通过 stdio 协议调用的股票分析/决策信号/交易信号等工具
+- [新功能] 新增 Web 端信号趋势面板（SignalTrendPanel），展示决策信号动作分布、置信度和健康评分
+- [新功能] 新增交易 API 端点：POST /api/v1/trading/signal-bridge/trigger、GET /api/v1/trading/signal-bridge/status
+- [新功能] 新增 ENABLE_TRADING、BRIDGE_POLL_INTERVAL_SEC、ENABLE_MCP_SERVER 配置项
+- [文档] 新增 QuantWeasel 文档体系（quantweasel-architecture/strategy-dev/risk/deploy）
+- [文档] 更新文档索引 INDEX.md，新增 QuantWeasel 交易系统章节
+- [测试] 新增 SignalDrivenStrategy 和 DecisionSignalBridge 单元测试
+
 - [修复] AlphaSift 热点题材刷新在 EastMoney 瞬断且无缓存时返回友好空态，并让桌面更新保留 AlphaSift 热点缓存。
 - [修复] 问股从历史报告进入后的追问会持续携带当前标的，切回或重载已有会话时可从历史消息恢复基础当前标的，并由后端阻断未明确切换时的错误股票工具调用、交易所片段和指标缩写误路由。
 - [修复] 自选股加入和删除按等价股票代码匹配港股及大小写美股变体，避免 `00700`、`HK00700`、`00700.HK` 或 `aapl`、`AAPL` 被误判为不同标的。

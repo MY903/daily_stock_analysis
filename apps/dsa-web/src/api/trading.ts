@@ -9,6 +9,7 @@ import type {
   SignalCreateRequest,
   RiskConfig,
   StrategyInfo,
+  BridgeStatus,
 } from '../types/trading';
 
 // ============ API ============
@@ -106,5 +107,27 @@ export const tradingApi = {
   getStrategies: async (): Promise<StrategyInfo[]> => {
     const response = await apiClient.get<Record<string, unknown>[]>('/api/v1/trading/strategies');
     return (response.data || []).map((item) => toCamelCase<StrategyInfo>(item));
+  },
+
+  /**
+   * Get DecisionSignalBridge status
+   */
+  getBridgeStatus: async (): Promise<BridgeStatus> => {
+    const response = await apiClient.get<Record<string, unknown>>("/api/v1/trading/signal-bridge/status");
+    return toCamelCase<BridgeStatus>(response.data);
+  },
+
+  /**
+   * Trigger DecisionSignalBridge manually
+   */
+  triggerBridge: async (): Promise<{ status: string; polled: number; accepted: number; rejected: number; errors: number }> => {
+    const response = await apiClient.post<Record<string, unknown>>("/api/v1/trading/signal-bridge/trigger");
+    return {
+      status: response.data.status as string,
+      polled: response.data.polled as number,
+      accepted: response.data.accepted as number,
+      rejected: response.data.rejected as number,
+      errors: response.data.errors as number,
+    };
   },
 };

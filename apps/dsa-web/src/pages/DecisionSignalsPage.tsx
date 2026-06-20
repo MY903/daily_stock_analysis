@@ -30,6 +30,7 @@ import type {
 } from '../types/decisionSignals';
 import { cn } from '../utils/cn';
 import { buildDecisionActionLabelMap } from '../utils/decisionAction';
+import SignalTrendPanel from '../components/decision-signals/SignalTrendPanel';
 
 const PAGE_SIZE = 20;
 
@@ -274,6 +275,8 @@ const DecisionSignalsPage: React.FC = () => {
           )}
         />
 
+
+        <SignalTrendPanel />
         <Card padding="md">
           <form className="grid gap-3 md:grid-cols-3 xl:grid-cols-6" onSubmit={handleApplyFilters}>
             <select

@@ -433,3 +433,78 @@ def get_strategies() -> List[StrategyInfo]:
             status_code=500,
             detail={"error": "internal_error", "message": f"获取策略列表失败: {str(exc)}"},
         )
+
+
+# ==================== DecisionSignal Bridge ====================
+
+_bridge_instance: Optional["DecisionSignalBridge"] = None
+
+
+def _get_bridge():
+    """Get or create the DecisionSignalBridge singleton."""
+    global _bridge_instance
+    if _bridge_instance is None:
+        from src.trading.signal_bridge import DecisionSignalBridge, BridgeConfig
+        _bridge_instance = DecisionSignalBridge(
+            config=BridgeConfig(
+                enabled=settings.ENABLE_TRADING,
+                poll_interval_sec=settings.BRIDGE_POLL_INTERVAL_SEC or 300,
+            )
+        )
+    return _bridge_instance
+
+
+@router.post(
+    "/signal-bridge/trigger",
+    responses={
+        200: {"description": "触发成功"},
+        500: {"description": "服务器错误"},
+    },
+    summary="触发信号桥接",
+    description="手动触发一次 DecisionSignal → QuantWeasel 桥接，将活跃决策信号推入交易流水线",
+)
+async def trigger_bridge():
+    """Manual trigger for the DecisionSignalBridge."""
+    if not settings.ENABLE_TRADING:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "trading_disabled", "message": "交易模块未启用，设置 ENABLE_TRADING=true"},
+        )
+    try:
+        bridge = _get_bridge()
+        result = await bridge.run_once()
+        return {
+            "status": "ok",
+            "polled": result.polled,
+            "accepted": result.accepted,
+            "rejected": result.rejected,
+            "errors": result.errors,
+        }
+    except Exception as exc:
+        logger.error(f"Signal bridge trigger failed: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"桥接失败: {str(exc)}"},
+        )
+
+
+@router.get(
+    "/signal-bridge/status",
+    responses={
+        200: {"description": "桥接器状态"},
+        500: {"description": "服务器错误"},
+    },
+    summary="信号桥接状态",
+    description="获取 DecisionSignalBridge 的运行状态和上次执行结果",
+)
+def get_bridge_status():
+    """Get the DecisionSignalBridge status."""
+    try:
+        bridge = _get_bridge()
+        return bridge.get_status()
+    except Exception as exc:
+        logger.error(f"Get bridge status failed: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"获取桥接状态失败: {str(exc)}"},
+        )

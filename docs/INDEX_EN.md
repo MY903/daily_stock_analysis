@@ -84,3 +84,12 @@ This is the entry point for project documentation. The README covers the project
 | **WeChat Work** | Tencent enterprise messaging platform with webhook notifications |
 | **Feishu** | ByteDance enterprise collaboration platform with webhook notifications |
 | **PushPlus / ServerChan** | Chinese mobile push notification services |
+
+## QuantWeasel Trading System
+
+| Document | Contents |
+|------|------|
+| [System Architecture](quantweasel-architecture.md) | Module mapping, pipeline, modes, scheduling |
+| [Strategy Development](quantweasel-strategy-dev.md) | BaseStrategy, registration, technical/AI/signal strategies |
+| [Risk Management](quantweasel-risk.md) | 8 risk checks, configuration, audit logging |
+| [Deployment & Config](quantweasel-deploy.md) | Standalone/embedded/CLI/Docker deployment |
