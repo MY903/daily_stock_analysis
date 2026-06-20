@@ -10,6 +10,7 @@ export type ReportType = StockReportType | 'market_review';
 export type AnalysisPhase = 'auto' | 'premarket' | 'intraday' | 'postmarket';
 
 export interface AnalysisRequest {
+  analysisMode?: string;
   stockCode?: string;
   stockCodes?: string[];
   reportType?: StockReportType;
@@ -516,3 +517,16 @@ export const getSentimentColor = (score: number): string => {
   if (score <= 80) return '#22c55e'; // green-500
   return '#10b981'; // emerald-500
 };
+
+// === Pre-existing missing type exports ===
+export interface EnsembleReports {
+  reports: Record<string, unknown>[];
+  consensus: string;
+  dispersion: number;
+  generated_at: string;
+}
+
+export interface RadarDataItem {
+  category: string;
+  score: number;
+}

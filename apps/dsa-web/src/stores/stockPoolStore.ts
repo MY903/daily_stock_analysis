@@ -41,6 +41,8 @@ let activeTaskLocalRevision = 0;
 const dismissedTaskIds = new Set<string>();
 
 export interface StockPoolState {
+  analysisMode?: string;
+  setAnalysisMode?: (mode: string) => void;
   query: string;
   selectionSource: SelectionSource;
   notify: boolean;

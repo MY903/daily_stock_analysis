@@ -1,6 +1,9 @@
 /**
  * Trading API type definitions
  * Mirrors api/v1/schemas/trading.py
+ *
+ * Most types match the API snake_case response. BridgeStatus uses camelCase
+ * because the API layer applies toCamelCase conversion.
  */
 
 // ============ System & Account ============
@@ -76,18 +79,18 @@ export interface StrategyInfo {
   enabled: boolean;
 }
 
-// ============ Bridge ============
+// ============ Bridge (camelCase matches toCamelCase conversion) ============
 
 export interface BridgeStatus {
   enabled: boolean;
   running: boolean;
-  poll_interval_sec: number;
-  min_confidence: number;
-  max_age_sec: number;
-  allowed_source_types: string[];
-  allowed_actions: string[];
-  last_run: string | null;
-  last_result: {
+  pollIntervalSec: number;
+  minConfidence: number;
+  maxAgeSec: number;
+  allowedSourceTypes: string[];
+  allowedActions: string[];
+  lastRun: string | null;
+  lastResult: {
     polled: number;
     accepted: number;
     rejected: number;

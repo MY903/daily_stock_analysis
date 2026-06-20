@@ -451,7 +451,7 @@ const TradingPage: React.FC = () => {
                   className="btn-secondary inline-flex items-center gap-1.5 !px-3 !py-1.5 !text-xs"
                   onClick={async () => {
                     try {
-                      const result = await tradingApi.triggerBridge();
+                      await tradingApi.triggerBridge();
                       await fetchOverview();
                     } catch { /* ignore */ }
                   }}
