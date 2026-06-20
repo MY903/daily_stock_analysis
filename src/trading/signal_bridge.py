@@ -22,8 +22,9 @@ API integration (via existing FastAPI endpoints):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from dataclasses import dataclass, field
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -49,6 +50,8 @@ class BridgeConfig:
     poll_interval_sec: int = 300  # 5 minutes
     min_confidence: float = 0.5
     max_age_sec: int = 43200  # 12 hours
+    notification_webhook_url: str = ""
+    notification_webhook_secret: str = ""
     allowed_source_types: Set[str] = field(
         default_factory=lambda: BRIDGEABLE_SOURCE_TYPES
     )
@@ -159,6 +162,8 @@ class DecisionSignalBridge:
         self._last_run = datetime.now(timezone.utc)
         self._last_result = result
 
+        # Send notification for run summary
+        self._notify_summary(result)
         logger.info(
             "DecisionSignalBridge: polled=%d accepted=%d rejected=%d errors=%d",
             result.polled, result.accepted, result.rejected, result.errors
@@ -325,6 +330,87 @@ class DecisionSignalBridge:
                 ds.get("id"), e
             )
             return False
+
+    def _notify_summary(self, result: BridgeResult) -> None:
+        """Send a Feishu card notification about bridge run results.
+
+        Uses the notification_webhook_url from BridgeConfig if configured.
+        The card shows polled/accepted/rejected/errors counts.
+
+        Args:
+            result: The BridgeResult from the last run_once().
+        """
+        if not self._config.notification_webhook_url:
+            return
+
+        if result.polled == 0 and result.accepted == 0:
+            logger.debug("Bridge notification skipped: nothing to report")
+            return
+
+        try:
+            import requests as req
+
+            colors = {
+                "green": "0x3CB371",
+                "yellow": "0xFFD700",
+                "red": "0xFF6347",
+            }
+            status_color = colors["green"] if result.errors == 0 else colors["yellow"]
+            if result.errors > 0:
+                status_color = colors["red"]
+
+            card = {
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "title": {"tag": "plain_text", "content": "🔔 DecisionSignal Bridge Run"},
+                    "template": "blue",
+                },
+                "elements": [
+                    {"tag": "div", "fields": [
+                        {"is_short": True, "text": {"tag": "lark_md", "content": f"**Polled:** {result.polled}"}},
+                        {"is_short": True, "text": {"tag": "lark_md", "content": f"**Accepted:** {result.accepted}"}},
+                    ]},
+                    {"tag": "div", "fields": [
+                        {"is_short": True, "text": {"tag": "lark_md", "content": f"**Rejected:** {result.rejected}"}},
+                        {"is_short": True, "text": {"tag": "lark_md", "content": f"**Errors:** {result.errors}"}},
+                    ]},
+                    {"tag": "hr"},
+                    {"tag": "note", "elements": [
+                        {"tag": "plain_text", "content": f"Time: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}"},
+                    ]},
+                ],
+            }
+
+            payload = {
+                "msg_type": "interactive",
+                "card": card,
+            }
+
+            secret = self._config.notification_webhook_secret
+            if secret:
+                import hashlib, hmac, base64
+                timestamp = str(int(time.time()))
+                sign = base64.b64encode(
+                    hmac.new(
+                        secret.encode("utf-8"),
+                        (timestamp + "\n" + secret).encode("utf-8"),
+                        hashlib.sha256,
+                    ).digest()
+                ).decode("utf-8")
+                payload["timestamp"] = timestamp
+                payload["sign"] = sign
+
+            resp = req.post(
+                self._config.notification_webhook_url,
+                json=payload,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            logger.info("Bridge notification sent (polled=%d)", result.polled)
+        except ImportError:
+            logger.debug("Bridge notification: requests not available")
+        except Exception as e:
+            logger.warning("Bridge notification failed: %s", e)
 
     def get_status(self) -> Dict[str, Any]:
         """Get bridge status for diagnostics.

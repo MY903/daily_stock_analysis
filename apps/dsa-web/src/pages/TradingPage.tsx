@@ -29,6 +29,7 @@ import { TRADING_TEXT } from '../locales/featureText';
 import type {
   AccountSummary,
   OrderInfo,
+  BridgeStatus,
   Position,
   RiskConfig,
   SignalInfo,
@@ -141,6 +142,7 @@ const TradingPage: React.FC = () => {
   const [account, setAccount] = useState<AccountSummary | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [riskConfig, setRiskConfig] = useState<RiskConfig | null>(null);
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus | null>(null);
   const [strategies, setStrategies] = useState<StrategyInfo[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [overviewError, setOverviewError] = useState<ParsedApiError | null>(null);
@@ -181,18 +183,20 @@ const TradingPage: React.FC = () => {
     setOverviewLoading(true);
     setOverviewError(null);
     try {
-      const [statusData, accountData, positionsData, riskData, strategiesData] = await Promise.all([
+      const [statusData, accountData, positionsData, riskData, strategiesData, bridgeData] = await Promise.all([
         tradingApi.getStatus(),
         tradingApi.getAccount(),
         tradingApi.getPositions(),
         tradingApi.getRiskConfig(),
         tradingApi.getStrategies(),
+        tradingApi.getBridgeStatus(),
       ]);
       setStatus(statusData);
       setAccount(accountData);
       setPositions(positionsData);
       setRiskConfig(riskData);
       setStrategies(strategiesData);
+      setBridgeStatus(bridgeData);
     } catch (err) {
       setOverviewError(getParsedApiError(err));
     } finally {
@@ -431,6 +435,83 @@ const TradingPage: React.FC = () => {
           ) : (
             <p className="text-sm text-secondary-text">{text.loading}</p>
           )}
+        </Card>
+
+        {/* Signal bridge status */}
+        <Card padding="md">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-foreground">
+              <Activity className="mr-2 inline-block h-4 w-4 text-purple-500" />
+              DecisionSignal Bridge
+            </h3>
+            <div className="flex items-center gap-2">
+              {bridgeStatus ? (
+                <button
+                  type="button"
+                  className="btn-secondary inline-flex items-center gap-1.5 !px-3 !py-1.5 !text-xs"
+                  onClick={async () => {
+                    try {
+                      const result = await tradingApi.triggerBridge();
+                      await fetchOverview();
+                    } catch { /* ignore */ }
+                  }}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Trigger
+                </button>
+              ) : null}
+            </div>
+          </div>
+          {bridgeStatus ? (
+            <div className="grid gap-4 sm:grid-cols-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.22em] text-secondary-text mb-1">Enabled</p>
+                {bridgeStatus.enabled ? (
+                  <span className="text-sm text-success flex items-center gap-1"><CheckCircle className="h-3.5 w-3.5" /> Yes</span>
+                ) : (
+                  <span className="text-sm text-secondary-text flex items-center gap-1"><XCircle className="h-3.5 w-3.5" /> No</span>
+                )}
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.22em] text-secondary-text mb-1">Status</p>
+                {bridgeStatus.running ? (
+                  <span className="text-sm text-success">Running</span>
+                ) : (
+                  <span className="text-sm text-secondary-text">Idle</span>
+                )}
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.22em] text-secondary-text mb-1">Poll Interval</p>
+                <span className="text-sm text-foreground">{bridgeStatus.pollIntervalSec}s</span>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.22em] text-secondary-text mb-1">Last Run</p>
+                <span className="text-sm text-foreground">{bridgeStatus.lastRun ? new Date(bridgeStatus.lastRun).toLocaleString() : "-"}</span>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-secondary-text">Bridge not configured or API unavailable</p>
+          )}
+          {bridgeStatus?.lastResult ? (
+            <div className="mt-3 grid gap-3 sm:grid-cols-4">
+              <div className="bg-gray-50 rounded p-2 text-center">
+                <div className="text-lg font-semibold text-gray-700">{bridgeStatus.lastResult.polled}</div>
+                <div className="text-xs text-gray-500">Polled</div>
+              </div>
+              <div className="bg-green-50 rounded p-2 text-center">
+                <div className="text-lg font-semibold text-green-700">{bridgeStatus.lastResult.accepted}</div>
+                <div className="text-xs text-green-600">Accepted</div>
+              </div>
+              <div className="bg-yellow-50 rounded p-2 text-center">
+                <div className="text-lg font-semibold text-yellow-700">{bridgeStatus.lastResult.rejected}</div>
+                <div className="text-xs text-yellow-600">Rejected</div>
+              </div>
+              <div className="bg-red-50 rounded p-2 text-center">
+                <div className="text-lg font-semibold text-red-700">{bridgeStatus.lastResult.errors}</div>
+                <div className="text-xs text-red-600">Errors</div>
+              </div>
+            </div>
+          ) : null}
         </Card>
 
         {/* Positions */}
