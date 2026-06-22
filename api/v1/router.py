@@ -24,7 +24,6 @@ from api.v1.endpoints import (
     portfolio,
     stocks,
     system_config,
-    trading,
     usage,
 )
 
@@ -107,10 +106,4 @@ router.include_router(
 router.include_router(
     health.router,
     tags=["Health"]
-)
-
-router.include_router(
-    trading.router,
-    prefix="/trading",
-    tags=["Trading"]
 )

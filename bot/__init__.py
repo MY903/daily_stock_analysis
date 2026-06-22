@@ -12,7 +12,6 @@
 - dispatcher.py: 命令分发器
 - commands/: 命令处理器
 - platforms/: 平台适配器
-  - lark_interactive.py: 飞书互动卡片 Bot（Stream 模式骨架）
 - handler.py: Webhook 处理器
 
 使用方式：
@@ -30,10 +29,6 @@
 - /batch              - 批量分析自选股
 - /help               - 显示帮助
 - /status             - 系统状态
-
-飞书互动卡片（platforms/lark_interactive.py）：
-- LarkCardBuilder: 构建信号确认、执行结果、风控拦截、信号过期卡片
-- LarkInteractiveBot: Stream 模式骨架，支持确认/拒绝回调注册
 """
 
 from bot.models import BotMessage, BotResponse, ChatType, WebhookResponse
